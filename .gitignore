@@ -1,1 +1,39 @@
+# Implementation Plans directory
 impl_plans/
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python bytecode & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Sensitive Environment Variables (Never commit API keys!)
+.env
+.env.local
+
+# Database & SQLite Storage
+data/*.db
+data/*.sqlite
+
+# Local Model Weights & Binary Checkpoints
+models/*.onnx
+models/*.bin
+models/*.pt
+models/*.safetensors
+models/needle_2.onnx
+
+# IDE & OS Artifacts
+.vscode/
+.idea/
+*.swp
+*.DS_Store
+Thumbs.db
