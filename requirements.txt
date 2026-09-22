@@ -14,8 +14,9 @@ PySide6>=6.6.0
 # AI Engine Integration
 google-genai>=0.1.1
 
-# Speech Output (Native Windows SAPI5 TTS)
+# Speech Output & Recognition
 pyttsx3>=2.90
+SpeechRecognition>=3.10.0
 
 # Testing Framework
 pytest>=7.4.0

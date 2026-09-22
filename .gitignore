@@ -30,6 +30,9 @@ models/*.bin
 models/*.pt
 models/*.safetensors
 models/needle_2.onnx
+models/needle_2_custom.onnx
+models/needle_2_custom.onnx.npz
+models/libneedle.dll
 
 # IDE & OS Artifacts
 .vscode/
