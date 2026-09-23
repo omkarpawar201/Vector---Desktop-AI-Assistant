@@ -55,13 +55,23 @@ class LaunchAppTool(BaseTool):
 
         target = APP_ALIASES.get(app_name, app_name)
 
+        # Security guard: block shell operators/metacharacters in the target to
+        # prevent command injection when falling back to the 'start' shell path.
+        _BLOCKED_SHELL_CHARS = set("&|;<>`$(){}[]")
+        if any(ch in target for ch in _BLOCKED_SHELL_CHARS):
+            return ToolResult.fail(
+                tool=self.name,
+                error="INVALID_APP_NAME",
+                message=f"Application name '{app_name}' contains invalid characters and was rejected."
+            )
+
         try:
             # Attempt to launch via Windows start command or subprocess
             if os.path.isabs(target) and os.path.exists(target):
                 os.startfile(target)
             else:
-                # Use Windows start protocol for universal path/app launching
-                subprocess.Popen(f"start {target}", shell=True)
+                # Use Windows start protocol with explicit quiting for universal path/app launching
+                subprocess.Popen(f'start "" "{target}"', shell=True)
 
             return ToolResult.ok(
                 tool=self.name,

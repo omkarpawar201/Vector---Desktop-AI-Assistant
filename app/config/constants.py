@@ -41,6 +41,7 @@ class IntentTier(str, Enum):
     - TIER_2_GEMINI: Cloud multi-step reasoning & planning fallback.
     """
     TIER_0_DIRECT = "TIER_0_DIRECT"
+    TIER_0_5_NEEDLE = "TIER_0_5_NEEDLE"
     TIER_1_NEEDLE = "TIER_1_NEEDLE"
     TIER_2_GEMINI = "TIER_2_GEMINI"
 
