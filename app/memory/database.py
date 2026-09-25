@@ -89,12 +89,24 @@ class DatabaseManager:
         """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        # Enforce foreign key constraints on every connection. PRAGMA foreign_keys
+        # is connection-scoped, so it must be set here (not just at schema init)
+        # for ON DELETE CASCADE rules to actually take effect.
+        conn.execute("PRAGMA foreign_keys = ON;")
         try:
             yield conn
         finally:
             conn.close()
 
 
-# Singleton database manager instance
+# Singleton database manager cache. Keyed by resolved db path so that a single
+# DatabaseManager (and its schema/pools) is shared per database file across the
+# app. Test suites that pass an explicit db_path still get isolated instances.
+_db_manager_cache: "dict[Optional[str], DatabaseManager]" = {}
+
+
 def get_db_manager(db_path: Optional[str] = None) -> DatabaseManager:
-    return DatabaseManager(db_path=db_path)
+    cache_key = str(Path(db_path).resolve()) if db_path else None
+    if cache_key not in _db_manager_cache:
+        _db_manager_cache[cache_key] = DatabaseManager(db_path=db_path)
+    return _db_manager_cache[cache_key]

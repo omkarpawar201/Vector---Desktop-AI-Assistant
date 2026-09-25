@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Local Model Settings
     needle_model_path: str = Field(default="models/needle_2_custom.onnx", description="Path to our custom ONNX (Tier 0.5, unambiguous name); official engine uses libneedle.dll + its own cache weights")
-    needle_official_weights_path: str = Field(default="models/needle2.cact", description="Path to official Cactus Needle 2 weights")
+    needle_official_weights_path: str = Field(default="models/needle3.cact", description="Path to official Cactus Needle 2 weights")
     needle_max_decode_tokens: int = Field(default=512, description="Max decode tokens for Needle extraction")
     needle_confidence_threshold: float = Field(
         default=DEFAULT_NEEDLE_THRESHOLD,

@@ -83,4 +83,41 @@ class ToolRegistry:
 # Helper function to get global registry instance
 def get_tool_registry() -> ToolRegistry:
     """Returns the global ToolRegistry instance."""
-    return ToolRegistry()
+    registry = ToolRegistry()
+    if not registry.list_tools():
+        register_all_default_tools(registry)
+    return registry
+
+
+def register_all_default_tools(registry: Optional[ToolRegistry] = None) -> ToolRegistry:
+    """Registers all system, media, app, file, window, power, and terminal tools into registry."""
+    reg = registry or ToolRegistry()
+    if reg.list_tools():
+        return reg
+
+    from app.tools.applications.launcher import CloseAppTool, GetRunningAppsTool, LaunchAppTool
+    from app.tools.files.manager import GetFileInfoTool, OpenFileTool, OpenFolderTool, SearchFilesTool
+    from app.tools.media.controller import MediaNextTool, MediaPauseTool, MediaPreviousTool, MediaPlayTool
+    from app.tools.power.power import LockPcTool, RestartPcTool, ShutdownPcTool, SleepPcTool
+    from app.tools.system.system_info import (
+        GetBatteryStatusTool, GetCpuUsageTool, GetDiskUsageTool, GetMemoryUsageTool, GetSystemStatsTool
+    )
+    from app.tools.system.volume import GetVolumeTool, MuteTool, SetVolumeTool, UnmuteTool
+    from app.tools.terminal.executor import ExecuteTerminalCommandTool
+    from app.tools.windows.manager import (
+        CloseWindowTool, GetActiveWindowTool, MaximizeWindowTool, MinimizeWindowTool, MoveWindowTool, ResizeWindowTool
+    )
+
+    tools = [
+        GetSystemStatsTool(), GetCpuUsageTool(), GetMemoryUsageTool(), GetDiskUsageTool(), GetBatteryStatusTool(),
+        GetVolumeTool(), SetVolumeTool(), MuteTool(), UnmuteTool(),
+        LockPcTool(), SleepPcTool(), RestartPcTool(), ShutdownPcTool(),
+        MediaPlayTool(), MediaPauseTool(), MediaNextTool(), MediaPreviousTool(),
+        LaunchAppTool(), CloseAppTool(), GetRunningAppsTool(),
+        SearchFilesTool(), OpenFileTool(), OpenFolderTool(), GetFileInfoTool(),
+        GetActiveWindowTool(), MaximizeWindowTool(), MinimizeWindowTool(), CloseWindowTool(), MoveWindowTool(), ResizeWindowTool(),
+        ExecuteTerminalCommandTool()
+    ]
+    for t in tools:
+        reg.register(t)
+    return reg

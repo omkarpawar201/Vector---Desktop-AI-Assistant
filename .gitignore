@@ -23,6 +23,8 @@ htmlcov/
 # Database & SQLite Storage
 data/*.db
 data/*.sqlite
+data/*.json
+data/*.jsonl
 
 # Local Model Weights & Binary Checkpoints
 models/*.onnx
@@ -33,6 +35,11 @@ models/needle_2.onnx
 models/needle_2_custom.onnx
 models/needle_2_custom.onnx.npz
 models/libneedle.dll
+models/*.cact
+models/needle2/*.cact
+
+# Traning checkpoints
+checkpoints/*.safetensors
 
 # IDE & OS Artifacts
 .vscode/

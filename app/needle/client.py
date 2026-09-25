@@ -1,5 +1,5 @@
 """
-Needle 2 Local Intent Model Integration for Vector Desktop AI Assistant.
+Needle 3 Local Intent Model Integration for Vector Desktop AI Assistant.
 Provides fast local intent recognition using ONNX Runtime.
 """
 
@@ -13,7 +13,7 @@ from app.tools.registry import ToolRegistry, get_tool_registry
 @dataclass
 class NeedleResult:
     """
-    Data structure representing the intent classification output from Needle 2.
+    Data structure representing the intent classification output from Needle 3.
     """
     tool_name: str = ""
     arguments: Dict[str, Any] = field(default_factory=dict)
@@ -27,7 +27,7 @@ class NeedleResult:
 
 class NeedleClient:
     """
-    Interface for the local Needle 2 intent model using ONNX Runtime.
+    Interface for the local Needle 3 intent model using ONNX Runtime.
     Converts raw user queries into structured tool call declarations with confidence scores.
     """
 
@@ -126,7 +126,7 @@ class NeedleClient:
         )
     def predict_cactus_needle_intent(self, user_input: str) -> NeedleResult:
         """
-        Tier 1: High-precision intent recognition using the official Cactus Needle C++ native engine (libneedle.dll), decoding the REAL on-disk weights (models/needle2.cact) under a grammar-constrained intent schema.
+        Tier 1: High-precision intent recognition using the official Cactus Needle C++ native engine (libneedle.dll), decoding the REAL on-disk weights (models/needle3.cact) under a grammar-constrained intent schema.
         """
         if not user_input or not user_input.strip():
             return NeedleResult(reason="Empty input")
@@ -134,8 +134,8 @@ class NeedleClient:
         query = user_input.strip().lower()
 
         # =====================================================================
-        # GENUINE official Cactus Needle 2 grammar-constrained KV-cache decode.
-        # Uses the REAL 13.1 MiB weights (models/needle2.cact) already on disk.
+        # GENUINE official Cactus Needle 3 grammar-constrained KV-cache decode.
+        # Uses the REAL 13.1 MiB weights (models/needle3.cact) already on disk.
         # If those weights are absent we FAIL LOUD (never fabricate 0.95).
         # =====================================================================
         weights_path = getattr(self.settings, "needle_official_weights_path", None)
@@ -146,7 +146,7 @@ class NeedleClient:
                 arguments={},
                 confidence=0.0,
                 reason=(
-                    f"Official Cactus Needle 2 weights absent ({weights_path or 'not configured'}); "
+                    f"Official Cactus Needle 3 weights absent ({weights_path or 'not configured'}); "
                     "escalate to Tier 2 (Gemini) honestly, never fabricate a 0.95 'official' hit."
                 )
             )
@@ -171,7 +171,7 @@ class NeedleClient:
                 max_new_tokens=self.settings.needle_max_decode_tokens,
                 weights=str(ws),
                 strict=True,
-                generation=2,
+                generation=3,
             )
         except Exception as exc:
             return NeedleResult(
@@ -179,7 +179,7 @@ class NeedleClient:
                 arguments={},
                 confidence=0.0,
                 reason=(
-                    f"Official Cactus Needle 2 decode raised: {exc}; "
+                    f"Official Cactus Needle 3 decode raised: {exc}; "
                     "escalate to Tier 2 (Gemini) honestly."
                 )
             )
@@ -200,8 +200,8 @@ class NeedleClient:
                 arguments=dict(call.get("arguments") or {}),
                 confidence=float(call.get("confidence") or 0.0),
                 reason=(
-                    f"Official Cactus Needle 2 grammar-constrained decode identified "
-                    f"tool '{call["name"]}' (needle2.cact Active)"
+                    f"Official Cactus Needle 3 grammar-constrained decode identified "
+                    f"tool '{call["name"]}' (needle3.cact Active)"
                 )
             )
 
@@ -210,7 +210,7 @@ class NeedleClient:
             arguments={},
             confidence=0.0,
             reason=(
-                "Official Cactus Needle 2 decode returned no valid tool call; "
+                "Official Cactus Needle 3 decode returned no valid tool call; "
                 "escalate to Tier 2 (Gemini) honestly."
             )
         )
