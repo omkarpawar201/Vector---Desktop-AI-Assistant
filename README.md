@@ -11,7 +11,7 @@
 ## 🚀 Key Features
 
 * **⚡ Tier 0 Reflex Matcher (< 5–10 ms)**: Instant direct matching for deterministic commands (volume, media controls, system stats, power) without waiting for LLM inference.
-* **🧠 Needle 2 Local Intent Engine**: Sub-second local intent recognition for privacy-focused desktop control.
+* **🧠 Needle 3 Local Intent Engine**: Sub-second local intent recognition for privacy-focused desktop control.
 * **☁️ Gemini API Fallback & Multi-Tool Loops**: Cloud reasoning fallback capable of multi-step autonomous tool execution (`MAX_TOOL_CALLS = 10` cap) for complex tasks.
 * **🔒 Strict Security Boundary**: Neither Needle nor Gemini directly execute OS commands. All actions flow through a central **Tool Registry**, **Permission Engine** (`SAFE`, `CONFIRM`, `DANGEROUS`, `BLOCKED`), and execution state machine.
 * **🛡️ Privacy Filter**: Automatically redacts sensitive environment variables, passwords, API keys, and SSH credentials before context reaches cloud models.
@@ -40,7 +40,7 @@
                            │ miss
                            ▼
                   ┌──────────────────┐
-                  │    Needle 2      │
+                  │    Needle 3      │
                   │ Local Intent AI  │
                   └────────┬─────────┘
                            │
@@ -84,7 +84,7 @@
 ## 🧰 Technology Stack
 
 * **Core**: Python 3.11+, PySide6 (GUI), SQLite (`vector.db` with WAL mode)
-* **Intent Engines**: Needle 2 (Local Model), Google Gemini API (`google-genai`), optional Ollama
+* **Intent Engines**: Needle 3 (Local Model), Google Gemini API (`google-genai`), optional Ollama
 * **Voice**: `faster-whisper` (STT), `pyttsx3` / SAPI5 (TTS), `silero-vad` (VAD)
 * **System Automation**: `psutil`, `pywin32` (`win32gui`, `win32con`), `pycaw` (Windows Audio), `PyAutoGUI`
 
@@ -122,7 +122,7 @@ vector/
 │   │   ├── system/               # system_info.py, volume.py, display.py
 │   │   ├── terminal/             # executor.py (whitelisted CLI)
 │   │   └── windows/              # manager.py (win32 window management)
-│   ├── needle/                   # Needle 2 local model integration
+│   ├── needle/                   # Needle 3 local model integration
 │   ├── gemini/                   # Gemini API client with multi-tool loop
 │   ├── memory/                   # SQLite database & trace logger
 │   ├── voice/                    # STT, TTS, VAD voice pipeline
