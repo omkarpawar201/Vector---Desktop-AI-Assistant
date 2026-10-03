@@ -1,6 +1,7 @@
 """
 Multi-Tiered Intent Router for Vector Desktop AI Assistant.
-Orchestrates request routing across Tier 0 (Reflexes), Tier 1 (Needle 2), and Tier 2 (Gemini API).
+Orchestrates Tier 0 (deterministic reflexes), Tier 0.5 (keyword model),
+Tier 1 (candidate-routed local Needle 3), and Tier 2 (Gemini API).
 """
 
 from dataclasses import dataclass, field
@@ -144,50 +145,80 @@ class IntentRouter:
         })
 
         # =====================================================================
-        # 3. TIER 1: Official Cactus Needle Local C++ Model (libneedle.dll)
+        # 3. TIER 1: Local Needle 3 over a pre-selected candidate tool set
+        #
+        # The tuned model is never handed the full registry. It was fine-tuned
+        # with 4-5 tools per example and has no abstention, so a wide list makes
+        # it answer confidently with the wrong tool. A deterministic candidate
+        # router picks the family first; any call outside it is rejected here and
+        # escalates rather than executing.
         # =====================================================================
-        needle_res = self.needle_client.predict_cactus_needle_intent(query)
-        is_tool_supported = bool(self.registry.get(needle_res.tool_name)) if needle_res.tool_name else False
-
-        if needle_res.is_valid and needle_res.confidence >= threshold and is_tool_supported:
-            print(f"\n[TIER 1: CACTUS NEEDLE] -> \"{query}\" (Tool: {needle_res.tool_name}, Confidence: {needle_res.confidence:.2f}, Args: {needle_res.arguments})")
+        selected = self.needle_client.select_candidates(query)
+        if selected is None:
             trace.append({
-                "step": "Tier 1 Cactus Needle",
-                "matched": True,
-                "tool": needle_res.tool_name,
-                "confidence": needle_res.confidence
+                "step": "Tier 1 Needle",
+                "matched": False,
+                "reason": "no candidate tool family matched; escalate to Tier 2",
             })
-
-            res, sm = self.executor.execute_tool(
-                tool_name=needle_res.tool_name,
-                raw_args=needle_res.arguments,
-                confirmed_by_user=confirmed_by_user
+        else:
+            needle_res = self.needle_client.predict_cactus_needle_intent(
+                query, selected=selected
+            )
+            is_tool_supported = (
+                bool(self.registry.get(needle_res.tool_name))
+                if needle_res.tool_name else False
             )
 
-            if not res.success and res.error == "CONFIRMATION_REQUIRED":
+            # Admission is candidate-set membership, not confidence: `needle
+            # build` drops the confidence head for local adapters, so a tuned
+            # model always reports confidence None and a numeric gate can never
+            # pass.
+            if needle_res.admitted and is_tool_supported:
+                print(f"\n[TIER 1: NEEDLE 3] -> \"{query}\" (Tool: {needle_res.tool_name}, "
+                      f"Family: {selected.family}, Candidates: {len(selected.tools)}, "
+                      f"Args: {needle_res.arguments})")
+                trace.append({
+                    "step": "Tier 1 Needle 3",
+                    "matched": True,
+                    "tool": needle_res.tool_name,
+                    "family": selected.family,
+                    "candidates": list(selected.tools),
+                    "candidate_source": selected.source,
+                })
+
+                res, sm = self.executor.execute_tool(
+                    tool_name=needle_res.tool_name,
+                    raw_args=needle_res.arguments,
+                    confirmed_by_user=confirmed_by_user
+                )
+
+                if not res.success and res.error == "CONFIRMATION_REQUIRED":
+                    return RouteResult(
+                        tier_used=IntentTier.TIER_1_NEEDLE,
+                        tool_result=res,
+                        response_text=res.message,
+                        requires_confirmation=True,
+                        tool_name=needle_res.tool_name,
+                        raw_arguments=needle_res.arguments,
+                        execution_trace=trace
+                    )
+
                 return RouteResult(
                     tier_used=IntentTier.TIER_1_NEEDLE,
                     tool_result=res,
                     response_text=res.message,
-                    requires_confirmation=True,
                     tool_name=needle_res.tool_name,
                     raw_arguments=needle_res.arguments,
                     execution_trace=trace
                 )
 
-            return RouteResult(
-                tier_used=IntentTier.TIER_1_NEEDLE,
-                tool_result=res,
-                response_text=res.message,
-                execution_trace=trace
-            )
-
-        trace.append({
-            "step": "Tier 1 Cactus Needle",
-            "matched": False,
-            "confidence": needle_res.confidence,
-            "reason": needle_res.reason
-        })
+            trace.append({
+                "step": "Tier 1 Needle 3",
+                "matched": False,
+                "family": selected.family,
+                "candidates": list(selected.tools),
+                "reason": needle_res.reason or "call not admitted",
+            })
 
         # =====================================================================
         # 3. TIER 2: Cloud Gemini API Multi-Tool Reasoning Loop

@@ -29,8 +29,20 @@ class Settings(BaseSettings):
 
     # Local Model Settings
     needle_model_path: str = Field(default="models/needle_2_custom.onnx", description="Path to our custom ONNX (Tier 0.5, unambiguous name); official engine uses libneedle.dll + its own cache weights")
-    needle_official_weights_path: str = Field(default="models/needle3.cact", description="Path to official Cactus Needle 2 weights")
-    needle_max_decode_tokens: int = Field(default=512, description="Max decode tokens for Needle extraction")
+    needle_official_weights_path: str = Field(default="models/needle3.cact", description="Path to official Cactus Needle base weights (untuned reference)")
+    needle_tuned_weights_path: str = Field(default="models/needle3_vector_v4.cact", description="Path to the local fine-tuned Needle 3 archive used for Tier 1 tool calls")
+    needle_generation: int = Field(default=3, description="Needle engine generation (3 for needle3 archives)")
+    needle_max_decode_tokens: int = Field(default=64, description="Max decode tokens for a Needle tool call (a call envelope is ~30 tokens; 512 only wastes prefix KV)")
+    needle_candidate_use_embedding: bool = Field(
+        default=False,
+        description="Allow cosine-similarity retrieval to pick a candidate family when the deterministic rules do not match. Off by default: measured against the 114 held-out rows, off-topic queries score 0.929-0.943 while correctly-routed ones score 0.909-0.978, so the ranges overlap and no threshold separates them"
+    )
+    needle_candidate_similarity: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Cosine floor for the embedding fallback. Only consulted when needle_candidate_use_embedding is enabled; with it enabled this default is unsafe and should be raised well above 0.95"
+    )
     needle_confidence_threshold: float = Field(
         default=DEFAULT_NEEDLE_THRESHOLD,
         ge=0.0,

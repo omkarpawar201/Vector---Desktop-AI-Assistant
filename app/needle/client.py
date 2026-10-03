@@ -1,76 +1,220 @@
 """
-Needle 3 Local Intent Model Integration for Vector Desktop AI Assistant.
-Provides fast local intent recognition using ONNX Runtime.
+Needle 3 local tool-calling for Vector.
+
+Tier 1 runs the fine-tuned ``needle3_vector_v4`` model, but never over a wide
+tool list. Two measured facts drive the design:
+
+1. V4 was fine-tuned with only 4-5 tools per example, in four fixed groups
+   (``data/vector_train.jsonl``).  A 17-tool prompt is out-of-distribution.
+2. V4 has no abstention.  Given only unrelated tools it still answers, with
+   whichever tool is present -- e.g. all six system tools made "play music",
+   "open chrome" and "close chrome" all return ``get_volume``.
+
+So the candidate set is chosen first (see :mod:`app.core.candidates`) and V4
+only ever chooses inside it.  Any call naming a tool outside that set is
+discarded rather than executed, which contains finding 2 to a 4-6 tool blast
+radius instead of 31.
+
+Two further correctness details:
+
+* ``auto_date=False``.  ``Needle`` otherwise prepends a ``date: ...`` fact to the
+  system prompt, but no training row carries a system field, so the default
+  would present a prefix the fine-tune never saw.
+* Confidence is not read from the model.  ``needle build`` drops the confidence
+  head for local adapters, so a tuned model reports ``confidence: None`` and
+  the old ``confidence > 0`` gate could never pass -- Tier 1 was unreachable.
+  Admission is decided by candidate-set membership instead, which is a real
+  check rather than a fabricated score.
 """
 
+from __future__ import annotations
+
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
 from app.config.settings import Settings, get_settings
+from app.core import candidates as candidate_router
 from app.tools.registry import ToolRegistry, get_tool_registry
 
 
 @dataclass
 class NeedleResult:
     """
-    Data structure representing the intent classification output from Needle 3.
+    Result of a local intent decision.
+
+    ``admitted`` is the authority for model-produced calls: it is True only when
+    the named tool was inside the candidate set the router offered.  Tier 0.5
+    rules set ``confidence`` instead, which is a real heuristic score.
     """
+
     tool_name: str = ""
     arguments: Dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.0
     reason: str = ""
+    admitted: bool = False
+    family: str = ""
 
     @property
     def is_valid(self) -> bool:
-        return bool(self.tool_name and self.confidence > 0)
+        return bool(self.tool_name) and (self.admitted or self.confidence > 0)
+
+
+class NeedleEnginePool:
+    """
+    Keeps one live ``Needle`` per candidate set.
+
+    A tuned ``Needle`` is a subprocess holding the 63 MB archive, and its tool
+    list is baked in at construction, so engines cannot be shared across
+    different candidate sets.  Reusing one per set is what makes a second and
+    later query cheap: the tool prefix stays resident instead of being rebuilt.
+    """
+
+    def __init__(self, weights: str, generation: int = 3, max_engines: int = 6):
+        self._weights = weights
+        self._generation = generation
+        self._max_engines = max_engines
+        self._engines: Dict[Tuple[str, ...], Any] = {}
+        self._order: List[Tuple[str, ...]] = []
+        self._lock = threading.Lock()
+
+    def ask(self, tools: Sequence[dict], query: str,
+            max_new_tokens: int = 64) -> Tuple[Optional[dict], str]:
+        """Return ``(call_or_None, note)`` for one query inside ``tools``."""
+        if not tools or not query or not query.strip():
+            return None, "no candidates or empty query"
+        try:
+            engine = self._acquire(tools)
+        except Exception as exc:
+            return None, f"engine unavailable: {exc}"
+        try:
+            response = engine.complete(query.strip(), max_new_tokens=max_new_tokens)
+        except Exception as exc:
+            return None, f"decode failed: {exc}"
+        calls = response.get("function_calls") or []
+        if not calls:
+            return None, "model returned no tool call"
+        return calls[0], ""
+
+    def _acquire(self, tools: Sequence[dict]):
+        key = tuple(sorted(t["name"] for t in tools))
+        with self._lock:
+            engine = self._engines.get(key)
+            if engine is not None:
+                return engine
+            from needle import Needle
+
+            engine = Needle(
+                tools=list(tools),
+                weights=self._weights,
+                generation=self._generation,
+                system="",
+                auto_date=False,
+            )
+            self._engines[key] = engine
+            self._order.append(key)
+            self._evict_locked()
+            return engine
+
+    def _evict_locked(self) -> None:
+        while len(self._order) > self._max_engines:
+            oldest = self._order.pop(0)
+            engine = self._engines.pop(oldest, None)
+            if engine is not None:
+                try:
+                    engine.close()
+                except Exception:
+                    pass
+
+    def close(self) -> None:
+        with self._lock:
+            for engine in self._engines.values():
+                try:
+                    engine.close()
+                except Exception:
+                    pass
+            self._engines.clear()
+            self._order.clear()
 
 
 class NeedleClient:
     """
-    Interface for the local Needle 3 intent model using ONNX Runtime.
-    Converts raw user queries into structured tool call declarations with confidence scores.
+    Interface to the local Needle 3 model.
+
+    ``predict_custom_onnx_intent`` is the pre-existing Tier 0.5 keyword tier and
+    is unchanged.  ``predict_cactus_needle_intent`` is now the candidate-routed
+    Tier 1 described in the module docstring.
     """
 
-    def __init__(self, settings: Optional[Settings] = None, registry: Optional[ToolRegistry] = None):
+    def __init__(self, settings: Optional[Settings] = None,
+                 registry: Optional[ToolRegistry] = None):
         self.settings = settings or get_settings()
         self.registry = registry or get_tool_registry()
-        self.onnx_session = None
-        self.dll_active = False
-        self.dll_lib = None
-        self._load_models_if_present()
+        self._pool: Optional[NeedleEnginePool] = None
+        self._pool_failed = False
+        self._schema_error: Optional[str] = None
 
-    def _load_models_if_present(self) -> None:
-        """
-        Loads native C++ libneedle.dll via ctypes or ONNX inference session if models exist.
-        """
-        dll_path = Path("models/libneedle.dll")
-        if dll_path.exists():
-            try:
-                import ctypes
-                self.dll_lib = ctypes.CDLL(str(dll_path.resolve()))
-                weights_size = ctypes.c_size_t.in_dll(self.dll_lib, "needle_weights_size").value
-                weights_addr = ctypes.addressof(ctypes.c_void_p.in_dll(self.dll_lib, "needle_weights"))
-                self.dll_lib.needle_load.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-                self.dll_lib.needle_load.restype = ctypes.c_int
-                self.dll_lib.needle_load(weights_addr, weights_size)
-                self.dll_lib.needle_init.argtypes = []
-                self.dll_lib.needle_init.restype = ctypes.c_int
-                self.dll_lib.needle_init()
-                self.dll_active = True
-            except Exception:
-                self.dll_active = False
+    # -- engine lifecycle ---------------------------------------------------
 
-        model_path = Path(self.settings.needle_model_path)
-        if model_path.exists():
-            try:
-                import onnxruntime as ort
-                self.onnx_session = ort.InferenceSession(str(model_path))
-            except Exception:
-                self.onnx_session = None
+    def _weights_path(self) -> Optional[Path]:
+        configured = getattr(self.settings, "needle_tuned_weights_path", None)
+        if not configured:
+            return None
+        path = Path(str(configured))
+        return path if path.is_file() else None
+
+    def _get_pool(self) -> Optional[NeedleEnginePool]:
+        if self._pool is not None or self._pool_failed:
+            return self._pool
+        weights = self._weights_path()
+        if weights is None:
+            self._pool_failed = True
+            return None
+        self._pool = NeedleEnginePool(
+            weights=str(weights),
+            generation=getattr(self.settings, "needle_generation", 3),
+        )
+        return self._pool
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
+
+    # -- schemas ------------------------------------------------------------
+
+    def _schemas_by_name(self) -> Dict[str, dict]:
+        try:
+            return {t["name"]: t for t in self.registry.export_schemas()}
+        except Exception as exc:
+            # Do not swallow this into an empty dict: an empty schema map makes
+            # Tier 1 silently unreachable, which is exactly how it was dead
+            # before. The reason string is surfaced by predict_cactus_needle_intent.
+            self._schema_error = f"{type(exc).__name__}: {exc}"
+            return {}
+
+    def candidate_schemas(self, selected: candidate_router.CandidateSet
+                          ) -> List[dict]:
+        """Schemas for a candidate set, restricted to trained tools."""
+        by_name = self._schemas_by_name()
+        if not by_name:
+            return []
+        out = []
+        for name in selected.tools:
+            if name in candidate_router.UNTRAINED_TOOLS:
+                continue
+            schema = by_name.get(name)
+            if schema is None:
+                continue
+            out.append(schema)
+        return out
+
+    # -- Tier 0.5 (unchanged keyword tier) ---------------------------------
 
     def predict_custom_onnx_intent(self, user_input: str) -> NeedleResult:
         """
-        Tier 0.5: Fast local intent recognition using our custom trained ONNX model (needle_2_custom.onnx; the plain needle_2.onnx basename is reserved for official Cactus engine weights).
+        Tier 0.5: fast local intent recognition using our custom trained ONNX model (needle_2_custom.onnx; the plain needle_2.onnx basename is reserved for official Cactus engine weights).
         """
         if not user_input or not user_input.strip():
             return NeedleResult(reason="Empty input")
@@ -124,101 +268,102 @@ class NeedleClient:
             confidence=0.35,
             reason="Low Custom ONNX model confidence"
         )
-    def predict_cactus_needle_intent(self, user_input: str) -> NeedleResult:
+
+    # -- Tier 1 (candidate-routed Needle) -----------------------------------
+
+    def select_candidates(self, user_input: str
+                          ) -> Optional[candidate_router.CandidateSet]:
+        """Choose the candidate set for a query, or None to escalate."""
+        if not user_input or not user_input.strip():
+            return None
+        schemas = [t for t in self._schemas_by_name().values()
+                   if t.get("name") in candidate_router.TRAINED_TOOLS]
+        return candidate_router.select(
+            user_input,
+            tools=schemas,
+            min_similarity=float(
+                getattr(self.settings, "needle_candidate_similarity",
+                        candidate_router.EMBED_MIN_SIMILARITY)),
+            use_embedding=bool(
+                getattr(self.settings, "needle_candidate_use_embedding", False)),
+        )
+
+    def predict_cactus_needle_intent(
+        self,
+        user_input: str,
+        selected: Optional[candidate_router.CandidateSet] = None,
+    ) -> NeedleResult:
         """
-        Tier 1: High-precision intent recognition using the official Cactus Needle C++ native engine (libneedle.dll), decoding the REAL on-disk weights (models/needle3.cact) under a grammar-constrained intent schema.
+        Tier 1: run the tuned Needle model over a pre-selected candidate set.
+
+        The returned result is admitted only when the model named a tool inside
+        that set.  Anything else -- including any of the 14 tools the fine-tune
+        never saw -- is reported as a miss so the router can escalate rather
+        than execute.
         """
         if not user_input or not user_input.strip():
             return NeedleResult(reason="Empty input")
 
-        query = user_input.strip().lower()
-
-        # =====================================================================
-        # GENUINE official Cactus Needle 3 grammar-constrained KV-cache decode.
-        # Uses the REAL 13.1 MiB weights (models/needle3.cact) already on disk.
-        # If those weights are absent we FAIL LOUD (never fabricate 0.95).
-        # =====================================================================
-        weights_path = getattr(self.settings, "needle_official_weights_path", None)
-        ws = Path(str(weights_path)) if weights_path else None
-        if not ws or not ws.is_file():
+        weights = self._weights_path()
+        if weights is None:
             return NeedleResult(
-                tool_name="",
-                arguments={},
-                confidence=0.0,
                 reason=(
-                    f"Official Cactus Needle 3 weights absent ({weights_path or 'not configured'}); "
-                    "escalate to Tier 2 (Gemini) honestly, never fabricate a 0.95 'official' hit."
+                    f"Tuned Needle weights absent ({getattr(self.settings, 'needle_tuned_weights_path', None) or 'not configured'}); "
+                    "escalate to Tier 2 honestly, never fabricate a hit."
                 )
             )
 
-        try:
-            import needle
-            from app.needle.schemas import get_cactus_tools
+        if selected is None:
+            selected = self.select_candidates(user_input)
+        if selected is None:
+            return NeedleResult(reason="no candidate tool set matched; escalate to Tier 2")
 
-            # The official extract() consumes a grammar schema built from a callable
-            # whose annotations describe the tool surface. Reuse the real registered
-            # tool functions (launch_app, close_app, search_files, get_running_apps).
-            grammar_schema = needle.build_schema(get_cactus_tools)
-            decoded = needle.extract(
-                text=query,
-                schema=grammar_schema,
-                system=(
-                    "You are a trusted local desktop intent decoder. Only emit a single "
-                    "tool_call whose arguments satisfy the supplied grammar schema. "
-                    "Never invent arguments the user did not state; never fall back to "
-                    "keyword slot matching."
+        tools = self.candidate_schemas(selected)
+        if not tools:
+            detail = f" (registry export failed: {self._schema_error})" if self._schema_error else ""
+            return NeedleResult(
+                reason=f"candidate family {selected.family!r} has no registered schemas{detail}"
+            )
+
+        pool = self._get_pool()
+        if pool is None:
+            return NeedleResult(reason="Needle engine pool unavailable")
+
+        call, note = pool.ask(tools, user_input,
+                              max_new_tokens=getattr(self.settings,
+                                                    "needle_max_decode_tokens", 64))
+        if call is None:
+            return NeedleResult(
+                family=selected.family,
+                reason=f"Needle produced no usable call ({note or 'unknown'}); escalate to Tier 2",
+            )
+
+        name = str(call.get("name") or "")
+        if not selected.allows(name):
+            return NeedleResult(
+                family=selected.family,
+                reason=(
+                    f"rejected: {selected.reject_reason(name)}; "
+                    f"escalate to Tier 2"
                 ),
-                max_new_tokens=self.settings.needle_max_decode_tokens,
-                weights=str(ws),
-                strict=True,
-                generation=3,
-            )
-        except Exception as exc:
-            return NeedleResult(
-                tool_name="",
-                arguments={},
-                confidence=0.0,
-                reason=(
-                    f"Official Cactus Needle 3 decode raised: {exc}; "
-                    "escalate to Tier 2 (Gemini) honestly."
-                )
-            )
-
-        # Official needle.extract returns either a pydantic model (call) or a
-        # dict with a 'tool_call' / 'intent' envelope. Map either honestly.
-        call = None
-        if isinstance(decoded, dict) and decoded.get("tool_call"):
-            call = decoded["tool_call"]
-        elif isinstance(decoded, dict) and decoded.get("intent"):
-            call = decoded["intent"]
-        elif hasattr(decoded, "model_dump"):
-            call = decoded.model_dump()
-
-        if call and call.get("name"):
-            return NeedleResult(
-                tool_name=call["name"],
-                arguments=dict(call.get("arguments") or {}),
-                confidence=float(call.get("confidence") or 0.0),
-                reason=(
-                    f"Official Cactus Needle 3 grammar-constrained decode identified "
-                    f"tool '{call["name"]}' (needle3.cact Active)"
-                )
             )
 
         return NeedleResult(
-            tool_name="",
-            arguments={},
-            confidence=0.0,
+            tool_name=name,
+            arguments=dict(call.get("arguments") or {}),
+            admitted=True,
+            family=selected.family,
             reason=(
-                "Official Cactus Needle 3 decode returned no valid tool call; "
-                "escalate to Tier 2 (Gemini) honestly."
-            )
+                f"Needle 3 selected {name!r} from the "
+                f"{selected.family} candidate set ({len(tools)} tools, "
+                f"chosen by {selected.source})"
+            ),
         )
-
 
     def predict_intent(self, user_input: str) -> NeedleResult:
         """
-        Analyzes user input trying Custom ONNX model first (Tier 0.5) then Cactus Needle (Tier 1).
+        Analyses user input, trying the Tier 0.5 keyword model first, then the
+        candidate-routed Needle model.
         """
         res_onnx = self.predict_custom_onnx_intent(user_input)
         if res_onnx.is_valid and res_onnx.confidence >= self.settings.needle_confidence_threshold:
