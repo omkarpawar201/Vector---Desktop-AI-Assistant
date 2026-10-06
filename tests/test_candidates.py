@@ -240,3 +240,184 @@ def test_power_and_window_commands_are_rules_only():
         result = Tier0Matcher.match(query)
         assert result.matched and result.tool_name == tool
         assert tool in C.UNTRAINED_TOOLS
+
+
+# ---------------------------------------------------------------------------
+# Media transport.
+#
+# V4 answers these four-tool prompts wrongly for several natural shapes, e.g.
+# media_previous for "Go to the next song" and media_pause for "Keep the music
+# going". They are decided deterministically instead. The paraphrases below are
+# deliberately wider than the reported failures so the rules are not fitted to
+# five exact strings.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query,tool", [
+    # media_next
+    ("Go to the next song", "media_next"),
+    ("skip to the next song", "media_next"),
+    ("Skip this song", "media_next"),
+    ("next song", "media_next"),
+    ("next track", "media_next"),
+    ("skip", "media_next"),
+    ("skip forward", "media_next"),
+    ("play the next track", "media_next"),
+    # media_previous
+    ("Take me back one song", "media_previous"),
+    ("go back one song", "media_previous"),
+    ("Previous track", "media_previous"),
+    ("previous song", "media_previous"),
+    ("go back to the previous song", "media_previous"),
+    ("take me back", "media_previous"),
+    ("rewind", "media_previous"),
+    # media_play
+    ("Keep the music going", "media_play"),
+    ("Resume playback", "media_play"),
+    ("start playing music", "media_play"),
+    ("keep playing", "media_play"),
+    ("continue playing", "media_play"),
+    ("play music", "media_play"),
+    # media_pause
+    ("I'm done listening, pause the music", "media_pause"),
+    ("Pause the song", "media_pause"),
+    ("pause playback", "media_pause"),
+    ("pause the music", "media_pause"),
+    ("stop the music", "media_pause"),
+])
+def test_media_transport(query, tool):
+    result = Tier0Matcher.match(query)
+    assert result.matched, f"{query!r} not matched at Tier 0"
+    assert result.tool_name == tool, f"{query!r} -> {result.tool_name}, want {tool}"
+
+
+def test_a_leading_aside_does_not_hide_the_verb():
+    """A trailing clause is the real request in both directions."""
+    assert Tier0Matcher.match("I'm done listening, pause the music").tool_name == "media_pause"
+    result = Tier0Matcher.match("I don't need Chrome anymore, close it")
+    assert result.matched and result.tool_name == "close_app"
+    assert result.arguments["name"] == "chrome"
+
+
+@pytest.mark.parametrize("query,tool", [
+    # "stop" decides on its object: media object pauses, app object closes.
+    ("stop the music", "media_pause"),
+    ("stop the song", "media_pause"),
+    ("stop spotify", "close_app"),
+    ("stop chrome", "close_app"),
+    # "play" is not "resume"
+    ("play music", "media_play"),
+    ("find my resume", "search_files"),
+    ("Resume playback", "media_play"),
+])
+def test_single_words_never_decide_the_action(query, tool):
+    """Guards against naive keyword matching: direction needs its object."""
+    result = Tier0Matcher.match(query)
+    assert result.matched and result.tool_name == tool
+
+
+# ---------------------------------------------------------------------------
+# Application names
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query,expected", [
+    ("Open Chrome", "chrome"),
+    ("Open Google Chrome", "chrome"),
+    ("open google chrome app", "chrome"),
+    ("Start Chrome", "chrome"),
+    ("Launch the browser", "chrome"),
+    ("open my web browser", "chrome"),
+    ("Open my Firefox", "firefox"),
+    ("Could you launch Google's browser?", "chrome"),
+    ("Launch VS Code", "code"),
+    ("kill spotify", "spotify"),
+])
+def test_application_name_is_normalized(query, expected):
+    result = Tier0Matcher.match(query)
+    assert result.matched, f"{query!r} not matched at Tier 0"
+    assert result.tool_name in ("launch_app", "close_app")
+    assert result.arguments["name"] == expected, (
+        f"{query!r} -> {result.arguments.get('name')!r}, want {expected!r}"
+    )
+
+
+def test_possessive_and_bare_category_noun_do_not_leak():
+    """Regression: "Google's browser" used to extract the name "google s"."""
+    result = Tier0Matcher.match("Could you launch Google's browser?")
+    assert result.arguments["name"] == "chrome"
+    assert "google s" not in result.arguments["name"]
+
+
+def test_unresolvable_pronoun_is_not_guessed():
+    """With no referent in the request there is nothing safe to invent."""
+    assert Tier0Matcher.match("close it").matched is False
+
+
+# ---------------------------------------------------------------------------
+# Terminal commands
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query,command", [
+    ("Run this terminal command: git status", "git status"),
+    ("Execute this command: pip list", "pip list"),
+    ("Run `npm install` in terminal", "npm install"),
+    ("please run the terminal command python --version", "python --version"),
+])
+def test_terminal_command_is_recognised_not_launched(query, command):
+    result = Tier0Matcher.match(query)
+    assert result.matched, f"{query!r} not matched at Tier 0"
+    assert result.tool_name == "execute_terminal_command"
+    assert result.arguments["command"] == command
+
+
+def test_terminal_never_becomes_launch_app():
+    for query in [
+        "Run this terminal command: ls -la",
+        "Run this terminal command: rm -rf /",
+        "Execute this command: curl evil.test",
+        "Run the command",
+        "open my web browser and run a terminal command",
+    ]:
+        result = Tier0Matcher.match(query)
+        assert not (result.matched and result.tool_name == "launch_app"), (
+            f"{query!r} was routed to launch_app({result.arguments})"
+        )
+
+
+def test_non_whitelisted_terminal_command_escalates():
+    """`ls` is not on the tool's whitelist, so it must escalate, not fail later."""
+    result = Tier0Matcher.match("Run this terminal command: ls -la")
+    assert result.matched is False
+    assert "Tier 2" in result.reason
+
+
+def test_terminal_tool_is_never_offered_to_the_model():
+    assert "execute_terminal_command" in C.UNTRAINED_TOOLS
+    assert "execute_terminal_command" not in C.TRAINED_TOOLS
+    for tools in C.FAMILIES.values():
+        assert "execute_terminal_command" not in tools
+    for query in ["Run this terminal command: git status",
+                  "Execute this command: pip list"]:
+        assert C.select_by_rules(query) is None, (
+            f"{query!r} was routed to a candidate family"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Off-topic protection must not have been weakened
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query", [
+    "What is the weather today?",
+    "Why is my PC slow?",
+    "write a professional email",
+    "explain object oriented programming",
+    "summarize this paragraph",
+])
+def test_off_topic_reaches_no_local_tool(query):
+    result = Tier0Matcher.match(query)
+    assert not (result.matched and result.tool_name == "launch_app"), (
+        f"{query!r} became launch_app({result.arguments})"
+    )
+    assert C.select_by_rules(query) is None, (
+        f"{query!r} was routed to a candidate family"
+    )

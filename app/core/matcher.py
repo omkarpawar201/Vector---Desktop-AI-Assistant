@@ -5,7 +5,8 @@ Provides reflexes (<5-10ms latency) for deterministic system, volume, media, and
 
 from dataclasses import dataclass, field
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from app.config.constants import ALLOWED_TERMINAL_COMMANDS
 from app.core.normalizer import InputNormalizer
 
 
@@ -174,37 +175,195 @@ class Tier0Matcher:
     ]
 
     APP_OPEN_REGEXES = [
-        re.compile(r"^(?:please\s+|can you\s+|could you\s+)?(?:open|launch|start|run|fire\s+up)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application|browser|program))?$"),
+        # The target is captured greedily on purpose. An earlier non-greedy
+        # capture with an optional trailing "app|browser|program" group ate
+        # that word, so "Google's browser" arrived as just "google's" and the
+        # normalizer could no longer tell it was a browser request.
+        # _normalize_app_name strips the category noun itself.
+        re.compile(r"^(?:please\s+|can you\s+|could you\s+|would you\s+)?"
+                   r"(?:open|launch|start|run|fire\s+up)\s+(?:the\s+)?(.+)$"),
     ]
 
     APP_CLOSE_REGEXES = [
-        re.compile(r"^(?:please\s+|can you\s+|could you\s+)?(?:close|quit|exit|kill|terminate|stop)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application|browser|program))?$"),
+        re.compile(r"^(?:please\s+|can you\s+|could you\s+|would you\s+)?"
+                   r"(?:close|quit|exit|kill|terminate|stop)\s+(?:the\s+)?(.+)$"),
     ]
 
-    # Media transport, for the many "go back to the previous song" shapes that
-    # are too varied to enumerate. Checked before the app rules so that
+    # ------------------------------------------------------------------
+    # Terminal commands.
+    #
+    # ``execute_terminal_command`` is one of the 14 tools the fine-tune never
+    # saw, so it is rules-only and must never be sent to V4. Every pattern
+    # demands explicit shell/command wording, because a bare "run" is ambiguous
+    # with launching an application.
+    #
+    # Extraction runs on the raw text rather than ``InputNormalizer`` output:
+    # the normalizer replaces every non-word character with a space, which
+    # would turn "git status" into "git status" but also silently rewrite
+    # "ls -la" and strip backticks from "run `ls`".
+    # ------------------------------------------------------------------
+
+    TERMINAL_COMMAND_REGEXES = [
+        # "run this terminal command: ls -la", "execute the command: pip list"
+        re.compile(r"^(?:please\s+|can you\s+|could you\s+)?"
+                   r"(?:run|execute|perform)\s+"
+                   r"(?:this\s+|that\s+|the\s+|my\s+|a\s+)*"
+                   r"(?:terminal\s+|shell\s+|console\s+|cmd\s+|bash\s+)?"
+                   r"commands?\b\s*[:\-]?\s*(.+)$"),
+        # "run `ls` in terminal", "execute pip list using the shell"
+        re.compile(r"^(?:please\s+|can you\s+|could you\s+)?"
+                   r"(?:run|execute|perform)\s+[`'\"]?(?P<cmd>.+?)[`'\"]?\s+"
+                   r"(?:in|using|via|on)\s+(?:the\s+|a\s+)?"
+                   r"(?:terminal|shell|console|cmd|bash|powershell)\b"),
+        # "open the terminal", "launch console"
+        re.compile(r"^(?:please\s+)?(?:open|launch|start)\s+(?:the\s+)?"
+                   r"(?:terminal|console|shell|powershell)\b"),
+    ]
+
+    #: Backticks/quotes around an inline command are presentation, not content.
+    _COMMAND_WRAPPERS = re.compile(r"^[\s`'\"$]+|[\s`'\"$]+$")
+
+    # ------------------------------------------------------------------
+    # Application names.
+    #
+    # Duplicated from ``app/tools/applications/launcher.py`` on purpose: the
+    # launcher imports pyautogui, which the model layer must not require. The
+    # values are the canonical short aliases the launcher already resolves, and
+    # the same normalisation ``scripts/prepare_needle_dataset.py`` applied to
+    # the training data's ``name`` arguments.
+    # ------------------------------------------------------------------
+
+    _APP_ALIASES = {
+        "chrome": "chrome",
+        "google chrome": "chrome",
+        "google's browser": "chrome",
+        "browser": "chrome",
+        "web browser": "chrome",
+        "firefox": "firefox",
+        "mozilla firefox": "firefox",
+        "edge": "edge",
+        "msedge": "edge",
+        "microsoft edge": "edge",
+        "notepad": "notepad",
+        "calc": "calc",
+        "calculator": "calc",
+        "code": "code",
+        "vscode": "code",
+        "vs code": "code",
+        "visual studio code": "code",
+        "spotify": "spotify",
+        "explorer": "explorer",
+        "file explorer": "explorer",
+        "terminal": "terminal",
+        "cmd": "cmd",
+        "powershell": "powershell",
+    }
+
+    #: Category nouns that describe the *kind* of app, not its name.
+    _APP_CATEGORY_NOUNS = re.compile(
+        r"\s+(?:app|application|browser|web\s+browser|program|player|"
+        r"client|editor|window)$")
+
+    #: "close it", "quit that" -- the referent has to come from earlier context.
+    _APP_PRONOUNS = re.compile(r"^(?:it|that|this|them|these|those|him|her)$")
+
+    # ------------------------------------------------------------------
+    # Media transport.
+    #
+    # Matched as verb-phrase shapes rather than bare keywords, so that "next",
+    # "stop" or "keep" can never decide the action on their own: every pattern
+    # has to consume the whole clause. Checked before the app rules so that
     # "start playing music" is never read as launching an app called
     # "playing music".
-    MEDIA_NEXT_REGEX = re.compile(
-        r"^(?:skip|go\s+forward|next|forward)\s*(?:to\s+)?(?:the\s+)?"
-        r"(?:next\s+)?(?:song|track|video|one|tune)?$"
-        r"|^skip\s+(?:this|the)\s+(?:song|track|video)$"
-        r"|^skip\s+to\s+(?:the\s+)?next\s+(?:song|track|video)$"
-        r"|^skip\s+(?:forward|ahead)$"
-    )
-    MEDIA_PREV_REGEX = re.compile(
-        r"^(?:go\s+back|previous|prev|last|back|return)\s*(?:one)?\s*(?:to\s+)?(?:the\s+)?"
-        r"(?:previous|last)?\s*(?:song|track|video|one|tune)?$"
-        r"|^go\s+back\s+to\s+(?:the\s+)?(?:previous\s+)?(?:song|track)$"
-        r"|^play\s+(?:the\s+)?(?:previous|last)\s+(?:song|track)$"
-        r"|^return\s+to\s+(?:the\s+)?(?:previous|last)\s+(?:song|track)$"
-    )
-    #: "start playing music" is playback, not an app called "playing music".
-    MEDIA_PLAY_REGEX = re.compile(
-        r"^(?:start|begin|resume|continue|keep|carry\s+on)\s*"
-        r"(?:playing\s+|the\s+|back\s+)?"
-        r"(?:music|song|track|playback|audio|video|media|tv|show)$"
-        r"|^(?:unpause|resume)\s*$"
+    #
+    # V4 is measurably unreliable here: offered the four media tools it
+    # answered media_previous for "Go to the next song", media_pause for "Keep
+    # the music going" and media_play for "Take me back one song". These shapes
+    # are unambiguous to a person, so they are decided deterministically.
+    # ------------------------------------------------------------------
+
+    #: Words that can end a media clause. "keep the music going" is a play
+    #: request; the gerund is filler, not a different intent.
+    _MEDIA_FILLER = r"(?:\s+(?:going|on|off|please|now|for\s+me|again|" \
+                    r"if\s+you\s+(?:can|would|could)))?"
+
+    #: The object of a media verb. "player" is excluded on purpose: "stop the
+    #: music player" is closing an application, not pausing playback.
+    _MEDIA_OBJECT = r"(?:song|track|tune|music|playback|audio|media|video|" \
+                    r"podcast|playlist|album|tv|show|episode|file|item|one)"
+
+    #: Verb phrases that mean "start / resume playback".
+    MEDIA_PLAY_PATTERNS = [
+        # start|begin|resume|continue|keep|play [the|it|on|up|back|playing] <object>
+        re.compile(r"^(?:start|begin|resume|continue|keep|carry\s+on|play)\s+"
+                   r"(?:the\s+|this\s+|that\s+|it\s+|on\s+|up\s+|back\s+|"
+                   r"playing\s+|please\s+|just\s+)*"
+                   r"(?:music|song|track|playback|audio|media|video|podcast|"
+                   r"tv|show|playing|play)"
+                   + _MEDIA_FILLER + r"$"),
+        re.compile(r"^(?:unpause|resume|continue)\s*$"),
+        # "keep the music going" / "let the music keep playing"
+        re.compile(r"^let\s+(?:the\s+|it\s+)?(?:music|audio|playback|song)\s+"
+                   r"(?:keep\s+|go\s+|start\s+|continue\s+)?"
+                   r"(?:playing|going|running|on)"
+                   + _MEDIA_FILLER + r"$"),
+        re.compile(r"^keep\s+(?:the\s+|it\s+)?(?:music|audio|playback|song|"
+                   r"track)\s+(?:going|playing|on|rolling)"
+                   + _MEDIA_FILLER + r"$"),
+    ]
+
+    #: Verb phrases that mean "pause".
+    MEDIA_PAUSE_PATTERNS = [
+        re.compile(r"^(?:pause|halt)\s+(?:the\s+|this\s+|that\s+)*"
+                   + _MEDIA_OBJECT + r"(?:\s+player)?$"),
+        re.compile(r"^(?:pause|halt)\s*$"),
+        # "stop the music" is pause; "stop spotify" is closing an app, so the
+        # object is required here.
+        re.compile(r"^(?:stop|end)\s+(?:the\s+|this\s+|that\s+)*"
+                   + _MEDIA_OBJECT + r"(?!\s*player)\s*$"),
+        re.compile(r"^(?:i(?:'m| am)\s+)?done\s+listening\.?\s*$"),
+    ]
+
+    #: Verb phrases that mean "skip to the next item".
+    MEDIA_NEXT_PATTERNS = [
+        re.compile(r"^(?:skip|jump|move|switch|go|scroll|fast[-\s]?forward|"
+                   r"fwd|advance|roll)\s*"
+                   r"(?:on\s+|over\s+|to\s+|forward\s+|ahead\s+)*"
+                   r"(?:the\s+)?(?:next\s+)?"
+                   + _MEDIA_OBJECT + r"?\s*$"),
+        re.compile(r"^(?:next|forward|advance|skip)\s*"
+                   r"(?:the\s+)?(?:one\s+|track\s+|song\s+)?"
+                   + _MEDIA_OBJECT + r"?\s*$"),
+        re.compile(r"^(?:play|listen\s+to|listen\s+for)\s+(?:the\s+)?next\s+"
+                   + _MEDIA_OBJECT + r"\s*$"),
+        re.compile(r"^(?:skip|go|move|jump)\s+(?:forward|ahead|on)\s*$"),
+    ]
+
+    #: Verb phrases that mean "go back to the previous item".
+    MEDIA_PREV_PATTERNS = [
+        re.compile(r"^(?:go|move|jump|switch|scroll|take\s+me|play|listen\s+to|"
+                   r"return|rewind|fast[-\s]?back|replay)\s*"
+                   r"(?:me\s+)?(?:back\s*)?(?:one\s*)?(?:to\s+)?(?:the\s+)?"
+                   r"(?:previous|last|prior|preceding)\s+"
+                   + _MEDIA_OBJECT + r"?\s*$"),
+        re.compile(r"^(?:previous|prev|last|prior|preceding|back|rewind)\s*"
+                   r"(?:one\s*)?(?:the\s+)?"
+                   + _MEDIA_OBJECT + r"?\s*$"),
+        # "take me back one song", "go back one track"
+        re.compile(r"^(?:take\s+me\s+|go\s+|move\s+|jump\s+)?"
+                   r"(?:back|rewind|return)\s*(?:me\s+)?(?:one\s+)?"
+                   r"(?:to\s+)?(?:the\s+)?"
+                   + _MEDIA_OBJECT + r"?\s*$"),
+        re.compile(r"^(?:take\s+me\s+)?(?:back|rewind)\s*(?:me\s+)?$"),
+    ]
+
+    #: Ordered so the most specific intent wins. Play is deliberately last: a
+    #: clause that names a direction is never a bare play request.
+    MEDIA_INTENTS = (
+        ("media_pause", MEDIA_PAUSE_PATTERNS),
+        ("media_previous", MEDIA_PREV_PATTERNS),
+        ("media_next", MEDIA_NEXT_PATTERNS),
+        ("media_play", MEDIA_PLAY_PATTERNS),
     )
 
     #: If an app-open target contains any of these it is a media command, not an
@@ -214,6 +373,13 @@ class Tier0Matcher:
         r"\b(play|playing|playback|music|song|track|video|audio|podcast|"
         r"media|album|playlist|resume|pause)\b")
 
+    #: Explicit shell/command language. An app target containing any of these
+    #: is a terminal request, never an application name: without this,
+    #: "Run this terminal command: ls" launched an app called "terminal command".
+    _COMMAND_WORDS = re.compile(
+        r"\b(terminal|console|command\s+line|shell|bash|powershell|cmd|"
+        r"batch|script|command|commands)\b")
+
     #: Articles are dropped for exact-pattern lookup so "pause the song" and
     #: "pause song" resolve identically.
     _ARTICLES = re.compile(r"\b(?:the|my|a|an)\b")
@@ -222,6 +388,138 @@ class Tier0Matcher:
     def _drop_articles(cls, normalized: str) -> str:
         stripped = cls._ARTICLES.sub(" ", normalized)
         return re.sub(r"\s+", " ", stripped).strip()
+
+    @classmethod
+    def _clauses(cls, raw: str) -> List[str]:
+        """Candidate strings to try for a verb-phrase intent.
+
+        The whole request first, then its trailing clauses. This is what makes
+        "I'm done listening, pause the music" resolve as a pause, and "I don't
+        need Chrome anymore, close it" as a close, instead of being rejected for
+        having a leading clause. ``InputNormalizer`` replaces commas with
+        spaces, so clause splitting runs on the comma-preserving form.
+        """
+        whole = cls._normalize_keeping_paths(raw)
+        if not whole:
+            return []
+        clauses = [c.strip(" .!?") for c in whole.split(",")]
+        ordered = [whole]
+        ordered.extend(c for c in reversed(clauses) if c and c != whole)
+        return ordered
+
+    @classmethod
+    def _match_media(cls, raw: str) -> Optional[str]:
+        """Return the media tool for ``raw``, or None if it is not a transport
+        command. Returns None rather than guessing on a partial match."""
+        for candidate in cls._clauses(raw):
+            dearticled = cls._drop_articles(candidate)
+            for tool, patterns in cls.MEDIA_INTENTS:
+                for pattern in patterns:
+                    if pattern.match(dearticled):
+                        return tool
+        return None
+
+    @classmethod
+    def _match_terminal(cls, raw: str) -> Optional[MatchResult]:
+        """Deterministic route for explicit shell/command requests.
+
+        Returns a MatchResult for ``execute_terminal_command``, or None so the
+        caller can keep escalating. The command is only accepted when the tool's
+        own whitelist can act on it; anything else is left to Tier 2 rather than
+        handed to a tool that would only reject it.
+        """
+        normalized = cls._normalize_keeping_paths(raw)
+        if not normalized:
+            return None
+        dearticled = cls._drop_articles(normalized)
+
+        for pattern in cls.TERMINAL_COMMAND_REGEXES:
+            match = pattern.match(normalized) or pattern.match(dearticled)
+            if not match:
+                continue
+            if pattern is cls.TERMINAL_COMMAND_REGEXES[-1]:
+                # "open the terminal" launches the terminal app, it is not a
+                # command, so no argument to extract.
+                return MatchResult(
+                    matched=True, tool_name="execute_terminal_command",
+                    arguments={"command": ""}, confidence=1.0,
+                    reason="Tier 0 terminal launch rule (no model involved)")
+            command = match.groupdict().get("cmd")
+            if command is None:
+                command = match.group(1)
+            command = cls._COMMAND_WRAPPERS.sub("", (command or "")).strip()
+            command = cls._ARG_NOISE.sub("", command).strip()
+            if not command:
+                continue
+            binary = command.split()[0].lower().strip("'\"`")
+            if binary not in ALLOWED_TERMINAL_COMMANDS:
+                # Not on the tool's whitelist; escalating is honest, whereas
+                # routing it would produce a guaranteed tool failure.
+                return MatchResult(
+                    matched=False,
+                    reason=(f"Tier 0 detected a terminal command ({binary!r}) but it is "
+                            f"not in the allowed set; escalate to Tier 2"))
+            return MatchResult(
+                matched=True, tool_name="execute_terminal_command",
+                arguments={"command": command}, confidence=1.0,
+                reason=(f"Tier 0 terminal rule for whitelisted {binary!r} "
+                        f"(no model involved)"))
+        return None
+
+    @classmethod
+    def _normalize_app_name(cls, name: str, context: str = "") -> Optional[str]:
+        """Turn an extracted app target into a name the launcher understands.
+
+        Handles the natural-language shapes that used to leak through as
+        garbage: possessives ("Google's browser"), a bare category noun ("the
+        browser"), and pronouns referring back to an app named earlier in the
+        same request ("I don't need Chrome anymore, close it").
+        """
+        cleaned = (name or "").strip()
+        if not cleaned:
+            return None
+
+        # A trailing category noun describes the kind of app, not its name:
+        # "Google's browser" -> possessor "google", noun "browser".
+        generic = cleaned
+        generic = cls._APP_CATEGORY_NOUNS.sub("", generic).strip()
+        noun_is_generic = len(generic) != len(cleaned)
+
+        # Possessive: "Google's" -> "Google".
+        generic = re.sub(r"[’']s\b", "", generic)
+        generic = re.sub(r"^(?:the|a|an|my)\s+", "", generic.strip())
+        generic = re.sub(r"\s+", " ", generic).strip(" .!?,")
+
+        if cls._COMMAND_WORDS.search(generic or ""):
+            return None
+
+        if not generic or cls._APP_PRONOUNS.match(generic):
+            # Either a bare category noun ("the browser") or a pronoun ("close
+            # it"); in both cases the referent comes from the wider request.
+            resolved = cls._find_app_in_text(context)
+            if resolved:
+                return resolved
+            return "chrome" if noun_is_generic or not generic else None
+
+        resolved = cls._APP_ALIASES.get(generic)
+        if resolved:
+            return resolved
+        if noun_is_generic:
+            # "Google's browser" where the possessor is not itself a known app:
+            # the only browser worth launching is Chrome.
+            return "chrome"
+        return generic
+
+    @classmethod
+    def _find_app_in_text(cls, text: str) -> Optional[str]:
+        """First known application named in ``text``, longest alias first."""
+        haystack = (text or "").lower()
+        best = None
+        for alias in sorted(cls._APP_ALIASES, key=len, reverse=True):
+            if re.search(rf"\b{re.escape(alias)}\b", haystack):
+                if best is None or len(alias) > len(best):
+                    best = alias
+        return cls._APP_ALIASES.get(best) if best else None
 
     # Trailing noise that must not end up inside an extracted argument.
     _ARG_NOISE = re.compile(
@@ -454,28 +752,37 @@ class Tier0Matcher:
             return untrained
 
         # 5. Media transport, before the app rules: "start playing music" must
-        #    not become launch_app("playing music").
-        if cls.MEDIA_PREV_REGEX.match(dearticled):
+        #    not become launch_app("playing music"). Clause-aware, so
+        #    "I'm done listening, pause the music" resolves as a pause.
+        media_tool = cls._match_media(user_input)
+        if media_tool is not None:
             return MatchResult(
-                matched=True, tool_name="media_previous", arguments={},
+                matched=True, tool_name=media_tool, arguments={},
                 confidence=1.0,
-                reason=f"Tier 0 media_previous for '{dearticled}'")
-        if cls.MEDIA_NEXT_REGEX.match(dearticled):
-            return MatchResult(
-                matched=True, tool_name="media_next", arguments={},
-                confidence=1.0,
-                reason=f"Tier 0 media_next for '{dearticled}'")
-        if cls.MEDIA_PLAY_REGEX.match(dearticled):
-            return MatchResult(
-                matched=True, tool_name="media_play", arguments={},
-                confidence=1.0,
-                reason=f"Tier 0 media_play for '{dearticled}'")
+                reason=(f"Tier 0 {media_tool} verb-phrase rule (V4 answered "
+                        f"the wrong media tool for these shapes)"))
 
-        # 6. App close before app open, so "close chrome" is never an open.
-        for pattern in cls.APP_CLOSE_REGEXES:
-            m = pattern.match(normalized)
-            if m:
-                name = cls._clean_arg(m.group(1))
+        # 6. Explicit terminal commands, before the app rules: "Run this
+        #    terminal command: ls" must not become launch_app("terminal
+        #    command"). A non-whitelisted binary returns matched=False so the
+        #    router escalates instead of failing inside the tool.
+        terminal = cls._match_terminal(user_input)
+        if terminal is not None:
+            if terminal.matched:
+                return terminal
+            return MatchResult(matched=False, reason=terminal.reason)
+
+        # 7. App close before app open, so "close chrome" is never an open.
+        #    Matched against the comma/possessive-preserving form, not
+        #    ``InputNormalizer`` output, which turns "Google's" into "google s".
+        #    Each trailing clause is tried so a leading aside does not hide the
+        #    actual verb.
+        for candidate in cls._clauses(user_input):
+            for pattern in cls.APP_CLOSE_REGEXES:
+                m = pattern.match(candidate)
+                if not m:
+                    continue
+                name = cls._normalize_app_name(m.group(1), context=user_input)
                 if name and len(name) > 1 and not cls._MEDIA_WORDS.search(name):
                     return MatchResult(
                         matched=True,
@@ -485,11 +792,13 @@ class Tier0Matcher:
                         reason=f"Tier 0 close_app for '{name}'"
                     )
 
-        # 7. App open
-        for pattern in cls.APP_OPEN_REGEXES:
-            m = pattern.match(normalized)
-            if m:
-                name = cls._clean_arg(m.group(1))
+        # 8. App open
+        for candidate in cls._clauses(user_input):
+            for pattern in cls.APP_OPEN_REGEXES:
+                m = pattern.match(candidate)
+                if not m:
+                    continue
+                name = cls._normalize_app_name(m.group(1), context=user_input)
                 if name and len(name) > 1 and not cls._MEDIA_WORDS.search(name):
                     return MatchResult(
                         matched=True,
