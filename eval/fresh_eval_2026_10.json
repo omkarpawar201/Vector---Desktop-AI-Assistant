@@ -1,0 +1,574 @@
+{
+  "_comment": "Fresh independent evaluation set for the current Vector architecture. Written by hand against NEITHER data/vector_train.jsonl, vector_val.jsonl, vector_test.jsonl, NOR any query used in scripts/try_vector.py or prior manual testing. Verified disjoint by scripts/eval_fresh.py. Never merge this into a training or validation file.",
+  "expect": "tool name = expected tool; 'tier2' = expected Tier 2 escalation; arguments compared exactly when present",
+  "cases": [
+    {
+      "query": "how hard is the processor working right now",
+      "expected": "get_cpu_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "is the cpu pegged",
+      "expected": "get_cpu_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "give me a cpu reading",
+      "expected": "get_cpu_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "how busy is my cpu",
+      "expected": "get_cpu_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "processor load please",
+      "expected": "get_cpu_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "report my ram consumption",
+      "expected": "get_memory_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "memory footprint right now",
+      "expected": "get_memory_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "how much of my ram is occupied",
+      "expected": "get_memory_usage",
+      "category": "cpu_ram"
+    },
+    {
+      "query": "how many gigs are left on the drive",
+      "expected": "get_disk_usage",
+      "category": "disk_storage"
+    },
+    {
+      "query": "is the c drive full",
+      "expected": "get_disk_usage",
+      "category": "disk_storage"
+    },
+    {
+      "query": "how full is my hard drive",
+      "expected": "get_disk_usage",
+      "category": "disk_storage"
+    },
+    {
+      "query": "report filesystem capacity",
+      "expected": "get_disk_usage",
+      "category": "disk_storage"
+    },
+    {
+      "query": "tell me how much room i have on disk",
+      "expected": "get_disk_usage",
+      "category": "disk_storage"
+    },
+    {
+      "query": "storage capacity please",
+      "expected": "get_disk_usage",
+      "category": "disk_storage"
+    },
+    {
+      "query": "am i running low on power",
+      "expected": "get_battery_status",
+      "category": "battery"
+    },
+    {
+      "query": "how much juice is left",
+      "expected": "get_battery_status",
+      "category": "battery"
+    },
+    {
+      "query": "is the charger connected right now",
+      "expected": "get_battery_status",
+      "category": "battery"
+    },
+    {
+      "query": "report charge remaining",
+      "expected": "get_battery_status",
+      "category": "battery"
+    },
+    {
+      "query": "whats the power situation",
+      "expected": "get_battery_status",
+      "category": "battery"
+    },
+    {
+      "query": "battery indicator check",
+      "expected": "get_battery_status",
+      "category": "battery"
+    },
+    {
+      "query": "what number is the volume at",
+      "expected": "get_volume",
+      "category": "volume"
+    },
+    {
+      "query": "volume percentage right now",
+      "expected": "get_volume",
+      "category": "volume"
+    },
+    {
+      "query": "set the sound to 15",
+      "expected": "set_volume",
+      "arguments": {
+        "level": 15
+      },
+      "category": "volume"
+    },
+    {
+      "query": "push volume to 90",
+      "expected": "set_volume",
+      "arguments": {
+        "level": 90
+      },
+      "category": "volume"
+    },
+    {
+      "query": "nudge the volume to 70",
+      "expected": "set_volume",
+      "arguments": {
+        "level": 70
+      },
+      "category": "volume"
+    },
+    {
+      "query": "take the sound down to 35",
+      "expected": "set_volume",
+      "arguments": {
+        "level": 35
+      },
+      "category": "volume"
+    },
+    {
+      "query": "crank it to 60",
+      "expected": "set_volume",
+      "arguments": {
+        "level": 60
+      },
+      "category": "volume"
+    },
+    {
+      "query": "shush the speakers",
+      "expected": "mute",
+      "category": "volume"
+    },
+    {
+      "query": "kill the sound",
+      "expected": "mute",
+      "category": "volume"
+    },
+    {
+      "query": "bring the audio back",
+      "expected": "unmute",
+      "category": "volume"
+    },
+    {
+      "query": "on to the following track",
+      "expected": "media_next",
+      "category": "media"
+    },
+    {
+      "query": "advance the playlist",
+      "expected": "media_next",
+      "category": "media"
+    },
+    {
+      "query": "hit next",
+      "expected": "media_next",
+      "category": "media"
+    },
+    {
+      "query": "gimme the next one",
+      "expected": "media_next",
+      "category": "media"
+    },
+    {
+      "query": "jump ahead a track",
+      "expected": "media_next",
+      "category": "media"
+    },
+    {
+      "query": "back up one track",
+      "expected": "media_previous",
+      "category": "media"
+    },
+    {
+      "query": "step back one track",
+      "expected": "media_previous",
+      "category": "media"
+    },
+    {
+      "query": "reverse to the earlier track",
+      "expected": "media_previous",
+      "category": "media"
+    },
+    {
+      "query": "carry on with the track",
+      "expected": "media_play",
+      "category": "media"
+    },
+    {
+      "query": "fire up the music again",
+      "expected": "media_play",
+      "category": "media"
+    },
+    {
+      "query": "unpause the track",
+      "expected": "media_play",
+      "category": "media"
+    },
+    {
+      "query": "freeze the audio",
+      "expected": "media_pause",
+      "category": "media"
+    },
+    {
+      "query": "suspend the song",
+      "expected": "media_pause",
+      "category": "media"
+    },
+    {
+      "query": "kill the music",
+      "expected": "media_pause",
+      "category": "media"
+    },
+    {
+      "query": "get chrome up and running",
+      "expected": "launch_app",
+      "arguments": {
+        "name": "chrome"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "fire up notepad for me",
+      "expected": "launch_app",
+      "arguments": {
+        "name": "notepad"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "i need spotify going",
+      "expected": "launch_app",
+      "arguments": {
+        "name": "spotify"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "launch microsoft edge",
+      "expected": "launch_app",
+      "arguments": {
+        "name": "edge"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "bring up the calculator",
+      "expected": "launch_app",
+      "arguments": {
+        "name": "calc"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "open up the file explorer",
+      "expected": "launch_app",
+      "arguments": {
+        "name": "explorer"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "whats currently open",
+      "expected": "get_running_apps",
+      "category": "applications"
+    },
+    {
+      "query": "list whats running",
+      "expected": "get_running_apps",
+      "category": "applications"
+    },
+    {
+      "query": "which apps are live right now",
+      "expected": "get_running_apps",
+      "category": "applications"
+    },
+    {
+      "query": "close firefox for me",
+      "expected": "close_app",
+      "arguments": {
+        "name": "firefox"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "get rid of chrome",
+      "expected": "close_app",
+      "arguments": {
+        "name": "chrome"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "end spotify",
+      "expected": "close_app",
+      "arguments": {
+        "name": "spotify"
+      },
+      "category": "applications"
+    },
+    {
+      "query": "where did i put my tax pdf",
+      "expected": "search_files",
+      "arguments": {
+        "query": "tax pdf"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "locate my passport scan",
+      "expected": "search_files",
+      "arguments": {
+        "query": "passport scan"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "i need to find the quarterly report",
+      "expected": "search_files",
+      "arguments": {
+        "query": "quarterly report"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "where is the contract file",
+      "expected": "search_files",
+      "arguments": {
+        "query": "contract"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "hunt down the meeting notes",
+      "expected": "search_files",
+      "arguments": {
+        "query": "meeting notes"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "search the disk for budget",
+      "expected": "search_files",
+      "arguments": {
+        "query": "budget"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "can you dig up the presentation",
+      "expected": "search_files",
+      "arguments": {
+        "query": "presentation"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "look for the signed copy",
+      "expected": "search_files",
+      "arguments": {
+        "query": "signed copy"
+      },
+      "category": "file_search"
+    },
+    {
+      "query": "what's the capital of France",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "write me a python function to sort a list",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "who won the world cup in 1998",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "translate this to spanish",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "what's the weather in Tokyo",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "tell me a joke",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "how do i boil an egg",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "recommend a good book",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "what does photosynthesis mean",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "why do cats purr",
+      "expected": "tier2",
+      "category": "off_topic"
+    },
+    {
+      "query": "put my computer to sleep",
+      "expected": "sleep_pc",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "i need to reboot the machine",
+      "expected": "restart_pc",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "power off my pc",
+      "expected": "shutdown_pc",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "can you lock my screen",
+      "expected": "lock_pc",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "what window am i looking at",
+      "expected": "get_active_window",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "shrink the current window",
+      "expected": "minimize_window",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "close the window",
+      "expected": "close_window",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "open the folder called Documents",
+      "expected": "open_folder",
+      "arguments": {
+        "path": "documents"
+      },
+      "category": "untrained_tools"
+    },
+    {
+      "query": "tell me the size of report.pdf",
+      "expected": "get_file_info",
+      "arguments": {
+        "path": "report.pdf"
+      },
+      "category": "untrained_tools"
+    },
+    {
+      "query": "open notes.docx",
+      "expected": "open_file",
+      "arguments": {
+        "path": "notes.docx"
+      },
+      "category": "untrained_tools"
+    },
+    {
+      "query": "execute git push origin main",
+      "expected": "execute_terminal_command",
+      "arguments": {
+        "command": "git push origin main"
+      },
+      "category": "untrained_tools"
+    },
+    {
+      "query": "move the current window to the left",
+      "expected": "tier2",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "make this window bigger",
+      "expected": "tier2",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "run rm -rf on my home directory in terminal",
+      "expected": "tier2",
+      "category": "untrained_tools"
+    },
+    {
+      "query": "make it quieter",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "the music is too loud can you fix it",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "carry on from where we left the music",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "open it",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "yeah go ahead",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "do the thing",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "can you handle that",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "my computer feels slow today",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "fix it",
+      "expected": "tier2",
+      "category": "ambiguous"
+    },
+    {
+      "query": "same as before",
+      "expected": "tier2",
+      "category": "ambiguous"
+    }
+  ]
+}

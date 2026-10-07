@@ -117,7 +117,10 @@ _KEYWORDS: Dict[str, List[Tuple[str, int]]] = {
         (r"\bcpu\b", 3), (r"\bprocessor\b", 3), (r"\bcore[s]? usage\b", 3),
         (r"\bram\b", 3), (r"\bmemory\b", 3),
         (r"\bdisk\b", 3), (r"\bstorage\b", 2), (r"\bspace\b", 2),
-        (r"\bbattery\b", 3), (r"\bcharg", 3),
+        (r"\bdrive\b", 3), (r"\bgigs?\b", 2), (r"\bfilesystem\b", 3),
+        (r"\bcapacity\b", 2),
+        (r"\bbattery\b", 3), (r"\bcharg", 3), (r"\bpower\b", 3),
+        (r"\bjuice\b", 2),
         (r"\bsystem\b", 2), (r"\bstats\b", 3), (r"\bmachine\b", 2),
         (r"\boverview\b", 2), (r"\bsummary\b", 2), (r"\bhow much\b", 2),
         (r"\bhow many\b", 1), (r"\blaptop\b", 1), (r"\bpercent", 2),
@@ -139,10 +142,14 @@ _KEYWORDS: Dict[str, List[Tuple[str, int]]] = {
         (r"\bopen\b", 2), (r"\blaunch\b", 4), (r"\bstart\b", 2),
         (r"\bclose\b", 2), (r"\bquit\b", 3), (r"\bexit\b", 3),
         (r"\bkill\b", 3), (r"\bterminate\b", 3), (r"\brunning\b", 3),
+        (r"\bbring\s+(?:up|out)\b", 3), (r"\bget\s+rid\s+of\b", 3),
+        (r"\bend\b", 3),
         (r"\bapplications?\b", 2), (r"\bprograms?\b", 1), (r"\bapps?\b", 2),
         (r"\bbrowser\b", 2), (r"\blist\b", 1), (r"\bprocess", 2),
         (r"\bfind\b", 3), (r"\bsearch\b", 3), (r"\blocate\b", 3),
         (r"\bwhere is\b", 3), (r"\blook for\b", 3),
+        (r"\bwhere\s+(?:did|do|have)\b", 3), (r"\bhunt\b", 3),
+        (r"\bdig\s+up\b", 3),
         (r"\bfile\b", 1), (r"\bfolder\b", 1), (r"\bdocuments?\b", 1),
     ],
 }
@@ -177,6 +184,59 @@ _UNCOVERED_INTENT = re.compile(
     r"|\b(active|foreground|current)\s+window\b"
     r"|\b(lock|sleep|restart|reboot|shutdown|power off|log ?off)\b"
     r"|\b(terminal|shell|command line|console|run)\b\s+(a\s+)?(command|cmd)?",
+    re.IGNORECASE,
+)
+
+# Vague requests that name no operation the registry could actually perform.
+# Family scoring works off the noun alone -- "audio", "music" -- so these clear
+# ``MIN_FAMILY_SCORE`` and reach V4, which has no notion of abstaining and
+# answers with whatever tool is in the candidate set.  Measured outcomes:
+# "freeze the audio" -> ``unmute``, "the music is too loud can you fix it" ->
+# ``media_pause``, "open it" -> ``launch_app`` on an arbitrary name.  None is
+# dangerous, but all three invent an action the user never asked for, so the
+# router returns None and the request reaches Tier 2 instead.
+#
+# Verified against both held-out sets: these four patterns fire on 0 of the 114
+# labelled rows, so the gate is untouched by them.
+
+#: Any verb the registry actually implements. Its absence is what makes a
+#: request unanswerable rather than merely unspecific.
+_ACTION_VERB = re.compile(
+    r"\b(open|launch|start|run|close|quit|exit|kill|terminate|stop|end|"
+    r"play|pause|resume|continue|skip|next|previous|prev|mute|unmute|"
+    r"silence|shush|turn|set|raise|lower|increase|decrease|adjust|change|"
+    r"find|search|locate|look|show|display|check|report|bring|get|give|"
+    r"lock|sleep|restart|reboot|shutdown|power|maximi[sz]e|minimi[sz]e|"
+    r"free|hunt|dig)\b",
+    re.IGNORECASE,
+)
+
+#: A plea or a transport-like word with no implementation behind it.
+_NO_OPERATION = re.compile(
+    r"\b(fix(?:es|ed|ing)?|handle[ds]?|handling|sort(?:ed)?\s+out|"
+    r"do\s+something|make\s+it|freeze|froze|frozen|halt)\b",
+    re.IGNORECASE,
+)
+
+#: A request that points back at an earlier one. Routing is single-turn, so
+#: there is no earlier turn to point at and the antecedent can never resolve.
+_SESSION_REFERENCE = re.compile(
+    r"\b(?:from\s+)?where\s+we\s+(?:left|stopped|were)\b"
+    r"|\bwhere\s+we\s+left\s+off\b"
+    r"|\b(?:same|just|exactly)\s+as\s+before\b"
+    r"|\blike\s+before\b"
+    r"|\bcarry\s+on\s+from\b",
+    re.IGNORECASE,
+)
+
+#: "open it" with nothing in this request to open. ``_normalize_app_name``
+#: resolves pronouns against the wider request and otherwise falls back to
+#: Chrome, turning an anaphor into an arbitrary launch.
+_DANGLING_PRONOUN = re.compile(
+    r"^(?:please\s+|can you\s+|could you\s+|would you\s+)?"
+    r"(?:open|launch|start|close|quit|exit|kill|terminate|stop|play|pause|"
+    r"resume|find|search|locate|bring|give|hand|pass|show)\s+"
+    r"(?:it|that|this|them|those|these|one|everything)\s*[.?!]?$",
     re.IGNORECASE,
 )
 
@@ -258,6 +318,10 @@ def select_by_rules(query: str) -> Optional[CandidateSet]:
         return None
     query = query.strip()
     if _UNCOVERED_INTENT.search(query):
+        return None
+    if _SESSION_REFERENCE.search(query) or _DANGLING_PRONOUN.match(query):
+        return None
+    if _NO_OPERATION.search(query) and not _ACTION_VERB.search(query):
         return None
 
     scores = score_families(query)

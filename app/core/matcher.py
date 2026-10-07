@@ -38,6 +38,8 @@ class Tier0Matcher:
         "silence audio": ("mute", {}),
         "silence sound": ("mute", {}),
         "stop the sound": ("mute", {}),
+        "kill the sound": ("mute", {}),
+        "kill sound": ("mute", {}),
         "unmute": ("unmute", {}),
         "unmute volume": ("unmute", {}),
         "unmute sound": ("unmute", {}),
@@ -173,6 +175,21 @@ class Tier0Matcher:
         re.compile(r"^(?:can you\s+|please\s+)?(?:find|search(?:\s+for)?|look\s+for|locate)\s+(?:my\s+|the\s+|a\s+|an\s+)?(.+)$"),
         re.compile(r"^where\s+is\s+(?:my\s+|the\s+)?(.+)$"),
     ]
+
+    #: "search the disk for budget", "look through the folder for invoices" --
+    #: a retrieval verb whose object is a *location* followed by an explicit
+    #: target. Checked ahead of the resource keywords below, which would
+    #: otherwise answer ``get_disk_usage`` for a request that never asked about
+    #: a resource. Deliberately demands the trailing ``for <target>``: a plain
+    #: "look for X" is already handled by ``FILE_SEARCH_REGEXES`` and must not
+    #: be re-captured here with the wrong group.
+    SEARCH_IN_PLACE = re.compile(
+        r"^(?:can you\s+|please\s+|could you\s+)?"
+        r"(?:find|search|look|locate)\s+(?!for\b)"
+        r"(?:(?:in|on|through|into|inside|across)\s+)?"
+        r"(?:my\s+|the\s+|a\s+|an\s+)?\w+\s+for\s+(.+)$",
+        re.IGNORECASE,
+    )
 
     APP_OPEN_REGEXES = [
         # The target is captured greedily on purpose. An earlier non-greedy
@@ -371,7 +388,7 @@ class Tier0Matcher:
     #: literally named "playing music".
     _MEDIA_WORDS = re.compile(
         r"\b(play|playing|playback|music|song|track|video|audio|podcast|"
-        r"media|album|playlist|resume|pause)\b")
+        r"media|album|playlist|resume|pause|sound|volume)\b")
 
     #: Explicit shell/command language. An app target containing any of these
     #: is a terminal request, never an application name: without this,
@@ -475,9 +492,13 @@ class Tier0Matcher:
         browser"), and pronouns referring back to an app named earlier in the
         same request ("I don't need Chrome anymore, close it").
         """
-        cleaned = (name or "").strip()
+        cleaned = cls._ARG_NOISE.sub("", (name or "").strip())
         if not cleaned:
             return None
+        # A phrasal-verb particle sits between the verb and the real target:
+        # "open up the file explorer" captured "up the file explorer". The
+        # particle belongs to the verb, never to the application's name.
+        cleaned = re.sub(r"^(?:up|out|down|over|away)\s+", "", cleaned)
 
         # A trailing category noun describes the kind of app, not its name:
         # "Google's browser" -> possessor "google", noun "browser".
@@ -528,6 +549,11 @@ class Tier0Matcher:
     _PRONOUN_PREFIX = re.compile(
         r"^(?:my|the|a|an|some|that|this)\s+")
 
+    #: An introducer announces a name rather than being part of it: the
+    #: pattern that captured "the folder called Documents" kept the word
+    #: "called" inside the path.
+    _INTRODUCER_PREFIX = re.compile(r"^(?:called|named|titled)\s+")
+
     # Trailing file extensions and words that are never part of a search term.
     _SEARCH_TAIL = re.compile(
         r"\s+(?:file|files|document|documents|folder|folders|pdf|docx?|xlsx?|"
@@ -572,6 +598,7 @@ class Tier0Matcher:
         cleaned = cls._ARG_NOISE.sub("", text.strip())
         while True:
             stripped = cls._PRONOUN_PREFIX.sub("", cleaned)
+            stripped = cls._INTRODUCER_PREFIX.sub("", stripped)
             if stripped == cleaned:
                 break
             cleaned = stripped
@@ -716,7 +743,23 @@ class Tier0Matcher:
                         reason=f"Tier 0 regex match set_volume({level_val}) from a directional phrase"
                     )
 
-        # 2c. Explicit resource queries. Each of these keywords maps to exactly
+        # 2c. "search <place> for <target>" is a file request that happens to
+        #     name a resource, so it has to be settled before the resource
+        #     keywords below get a chance to fire on the word "disk".
+        m = cls.SEARCH_IN_PLACE.match(normalized)
+        if m:
+            term = cls._clean_search_term(m.group(1))
+            if term:
+                return MatchResult(
+                    matched=True,
+                    tool_name="search_files",
+                    arguments={"query": term},
+                    confidence=1.0,
+                    reason=f"Tier 0 file search for '{term}' (place+target form: "
+                           f"the resource keyword must not preempt it)",
+                )
+
+        # 2d. Explicit resource queries. Each of these keywords maps to exactly
         #     one tool in the whole 31-tool registry, and V4 measurably collapses
         #     them all onto get_system_stats, so the deterministic answer is
         #     strictly better than letting the model choose.

@@ -25,6 +25,10 @@ Two further correctness details:
   the old ``confidence > 0`` gate could never pass -- Tier 1 was unreachable.
   Admission is decided by candidate-set membership instead, which is a real
   check rather than a fabricated score.
+* Every prediction starts from a clean engine.  ``Needle.complete`` on a reused
+  engine inherits the previous call's context, so without an explicit reset one
+  query's arguments came back as the next query's answer.  See
+  :class:`NeedleEnginePool` for the measurements and the fix.
 """
 
 from __future__ import annotations
@@ -63,12 +67,37 @@ class NeedleResult:
 
 class NeedleEnginePool:
     """
-    Keeps one live ``Needle`` per candidate set.
+    Keeps one live ``Needle`` per candidate set, cleared between queries.
 
     A tuned ``Needle`` is a subprocess holding the 63 MB archive, and its tool
     list is baked in at construction, so engines cannot be shared across
     different candidate sets.  Reusing one per set is what makes a second and
-    later query cheap: the tool prefix stays resident instead of being rebuilt.
+    later query cheap: the system prompt and tool prefix stay resident instead
+    of being rebuilt.
+
+    Reuse is only correct because generation state is cleared before every
+    completion.  ``Needle.complete`` does *not* start from a clean slate on a
+    previously used engine -- the worker keeps context from the prior call, so
+    one query's answer is returned as the next query's answer.  Measured against
+    the shipped weights:
+
+    * ``"i need to find the quarterly report"`` then ``"open it"`` returned
+      ``launch_app {"name": "quarterly report"}`` instead of a name of its own.
+      (``open it`` has since become a Tier 2 escalation; the property is pinned
+      by ``tests/test_needle_lifecycle.py`` using a phrasing that still reaches
+      V4.)
+    * repeating ``"volume percentage right now"`` alternated ``get_volume`` /
+      ``set_volume {level: 50}`` / ``get_volume`` / ``set_volume {level: 100}``.
+    * reversing the order of a 98-query evaluation changed 9 verdicts.
+
+    ``Needle.reset()`` issues the worker's ``reset`` operation (``needle_reset``)
+    and drops the engine's accumulated date facts, which is sufficient: with a
+    reset before every completion, repeated and reordered queries return exactly
+    what a brand new engine returns, while the resident prefix is kept.  Should
+    ``reset`` ever raise, the pooled engine is evicted rather than used -- a
+    fresh process always beats an engine whose state cannot be proven clear --
+    and an engine that cannot be cleared at all is used for one query and never
+    pooled, since a newly constructed ``Needle`` starts clean.
     """
 
     def __init__(self, weights: str, generation: int = 3, max_engines: int = 6):
@@ -78,31 +107,78 @@ class NeedleEnginePool:
         self._engines: Dict[Tuple[str, ...], Any] = {}
         self._order: List[Tuple[str, ...]] = []
         self._lock = threading.Lock()
+        # One lock per candidate set: reset+complete must be atomic, or two
+        # threads sharing an engine can hand each other state again.
+        self._use_locks: Dict[Tuple[str, ...], threading.Lock] = {}
+
+    @staticmethod
+    def _key(tools: Sequence[dict]) -> Tuple[str, ...]:
+        return tuple(sorted(t["name"] for t in tools))
 
     def ask(self, tools: Sequence[dict], query: str,
             max_new_tokens: int = 64) -> Tuple[Optional[dict], str]:
         """Return ``(call_or_None, note)`` for one query inside ``tools``."""
         if not tools or not query or not query.strip():
             return None, "no candidates or empty query"
-        try:
-            engine = self._acquire(tools)
-        except Exception as exc:
-            return None, f"engine unavailable: {exc}"
-        try:
-            response = engine.complete(query.strip(), max_new_tokens=max_new_tokens)
-        except Exception as exc:
-            return None, f"decode failed: {exc}"
+        key = self._key(tools)
+        with self._use_lock(key):
+            engine, reusable = self._prepare(tools, key)
+            if engine is None:
+                return None, "engine unavailable: could not obtain a clean engine"
+            try:
+                response = engine.complete(query.strip(),
+                                           max_new_tokens=max_new_tokens)
+            except Exception as exc:
+                return None, f"decode failed: {exc}"
+            finally:
+                if not reusable:
+                    self._evict(key)
         calls = response.get("function_calls") or []
         if not calls:
             return None, "model returned no tool call"
         return calls[0], ""
 
-    def _acquire(self, tools: Sequence[dict]):
-        key = tuple(sorted(t["name"] for t in tools))
+    def _prepare(self, tools: Sequence[dict],
+                 key: Tuple[str, ...]) -> Tuple[Any, bool]:
+        """Return ``(engine, reusable)`` with provably clear generation state.
+
+        ``reusable`` is False only when ``Needle.reset`` raised even on a
+        freshly constructed engine.  Such an engine is still safe for exactly
+        one query -- a new ``Needle`` starts clean -- but must never be pooled,
+        because there would then be no way to clear it for the next one.
+        """
+        engine, fresh = self._acquire(tools, key)
+        if fresh:
+            try:
+                engine.reset()
+                return engine, True
+            except Exception:
+                return engine, False
+        try:
+            engine.reset()
+            return engine, True
+        except Exception:
+            self._evict(key)
+        engine, _ = self._acquire(tools, key)
+        try:
+            engine.reset()
+            return engine, True
+        except Exception:
+            return engine, False
+
+    def _use_lock(self, key: Tuple[str, ...]) -> threading.Lock:
+        with self._lock:
+            lock = self._use_locks.get(key)
+            if lock is None:
+                lock = self._use_locks[key] = threading.Lock()
+            return lock
+
+    def _acquire(self, tools: Sequence[dict], key: Tuple[str, ...]):
+        """Return ``(engine, was_fresh)`` for the candidate set."""
         with self._lock:
             engine = self._engines.get(key)
             if engine is not None:
-                return engine
+                return engine, False
             from needle import Needle
 
             engine = Needle(
@@ -115,7 +191,18 @@ class NeedleEnginePool:
             self._engines[key] = engine
             self._order.append(key)
             self._evict_locked()
-            return engine
+            return engine, True
+
+    def _evict(self, key: Tuple[str, ...]) -> None:
+        with self._lock:
+            engine = self._engines.pop(key, None)
+            if key in self._order:
+                self._order.remove(key)
+        if engine is not None:
+            try:
+                engine.close()
+            except Exception:
+                pass
 
     def _evict_locked(self) -> None:
         while len(self._order) > self._max_engines:
@@ -136,6 +223,7 @@ class NeedleEnginePool:
                     pass
             self._engines.clear()
             self._order.clear()
+            self._use_locks.clear()
 
 
 class NeedleClient:
