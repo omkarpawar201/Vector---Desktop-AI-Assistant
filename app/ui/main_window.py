@@ -189,14 +189,24 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _handle_voice_toggle(self, active: bool) -> None:
-        if active:
-            self.command_input.btn_mic.setText("🔴 Listening...")
-            worker = TranscribeWorker(self.voice_listener)
-            worker.signals.result.connect(self._on_transcribe_finished)
-            worker.signals.error.connect(lambda err: self._reset_mic_btn())
-            self.thread_pool.start(worker)
-        else:
+        if not active:
             self._reset_mic_btn()
+            return
+
+        # The same privacy flag that gates spoken output also gates microphone
+        # capture: never open the mic while the voice pipeline is disabled.
+        if not self.settings.enable_voice:
+            self._reset_mic_btn()
+            self.chat_view.add_assistant_message(
+                "Voice input is disabled. Enable the voice pipeline in Settings to use the microphone."
+            )
+            return
+
+        self.command_input.btn_mic.setText("🔴 Listening...")
+        worker = TranscribeWorker(self.voice_listener)
+        worker.signals.result.connect(self._on_transcribe_finished)
+        worker.signals.error.connect(lambda err: self._reset_mic_btn())
+        self.thread_pool.start(worker)
 
     def _reset_mic_btn(self) -> None:
         self.command_input.btn_mic.setChecked(False)

@@ -45,7 +45,16 @@ class VADEngine:
 
     def filter_silence(self, pcm_chunks: List[bytes]) -> bytes:
         """
-        Strips silent leading and trailing PCM audio chunks.
+        Strips silent leading and trailing PCM audio chunks, preserving any
+        interior silence (pauses between words) so speech is not clipped.
         """
-        speech_chunks = [chunk for chunk in pcm_chunks if self.is_speech(chunk)]
-        return b"".join(speech_chunks)
+        chunks = list(pcm_chunks)
+        start = 0
+        end = len(chunks)
+
+        while start < end and not self.is_speech(chunks[start]):
+            start += 1
+        while end > start and not self.is_speech(chunks[end - 1]):
+            end -= 1
+
+        return b"".join(chunks[start:end])
