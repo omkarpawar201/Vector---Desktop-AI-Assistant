@@ -6,24 +6,24 @@ Seed content: `scripts/v5_seed_content.py`.
 ## 1. Totals
 
 - Candidate examples assembled: **932**
-- After burned/val/test exclusion: **919**
-- After set_volume template cap: **824**
-- After exact dedup: **780**
-- Final positives: **674**, negatives: **105**
+- After burned/val/test exclusion: **914**
+- After set_volume template cap: **819**
+- After exact + token-multiset dedup: **772**
+- Final positives: **664**, negatives: **105** (pool before cross-split resolution: 666 pos / 105 neg)
 
-- Train: **545**  (positive 472 / negative 73)
-- Validation: **117**  (positive 101 / negative 16)
-- Test: **117**  (positive 101 / negative 16)
+- Train: **537**  (positive 464 / negative 73)
+- Validation: **116**  (positive 100 / negative 16)
+- Test: **116**  (positive 100 / negative 16)
 
-Provenance (all splits): `v4`=331, `v5`=448
+Provenance (all splits): `v4`=324, `v5`=445
 
 ## 2. Examples per contrast block
 
 | Block | Examples |
 | --- | ---: |
-| B10_volume_media_boundary | 23 |
+| B10_volume_media_boundary | 22 |
 | B1_play_vs_pause | 47 |
-| B2_mute_vs_unmute | 39 |
+| B2_mute_vs_unmute | 38 |
 | B3_next_vs_previous | 40 |
 | B4_system_intra_family | 56 |
 | B5_battery_indirect | 22 |
@@ -31,7 +31,7 @@ Provenance (all splits): `v4`=331, `v5`=448
 | B6_volume_read_vs_write | 42 |
 | B7_search_vs_launch | 59 |
 | B8_abstention | 45 |
-| B9_cross_family_hard_negatives | 21 |
+| B9_cross_family_hard_negatives | 20 |
 | OFF_TOPIC | 40 |
 
 `OFF_TOPIC` = hand-written off-topic negatives carried in from `v5_seed_content.OFF_TOPIC`.
@@ -43,17 +43,17 @@ Provenance (all splits): `v4`=331, `v5`=448
 | get_system_stats | 16 | 3 | 3 | 22 |
 | get_cpu_usage | 16 | 4 | 4 | 24 |
 | get_memory_usage | 21 | 4 | 4 | 29 |
-| get_disk_usage | 25 | 6 | 6 | 37 |
+| get_disk_usage | 23 | 6 | 6 | 35 |
 | get_battery_status | 32 | 7 | 7 | 46 |
-| get_volume | 34 | 7 | 7 | 48 |
+| get_volume | 32 | 7 | 7 | 46 |
 | set_volume | 39 | 8 | 8 | 55 |
-| mute | 25 | 5 | 5 | 35 |
-| unmute | 23 | 5 | 5 | 33 |
+| mute | 24 | 5 | 5 | 34 |
+| unmute | 22 | 5 | 5 | 32 |
 | media_play | 33 | 7 | 7 | 47 |
-| media_pause | 31 | 7 | 7 | 45 |
+| media_pause | 30 | 7 | 7 | 44 |
 | media_next | 23 | 5 | 5 | 33 |
 | media_previous | 22 | 5 | 5 | 32 |
-| launch_app | 44 | 10 | 10 | 64 |
+| launch_app | 43 | 9 | 9 | 61 |
 | close_app | 25 | 5 | 5 | 35 |
 | get_running_apps | 17 | 3 | 3 | 23 |
 | search_files | 46 | 10 | 10 | 66 |
@@ -64,49 +64,52 @@ Provenance (all splits): `v4`=331, `v5`=448
 - Exact train/val overlap: **0**
 - Exact train/test overlap: **0**
 - Exact val/test overlap: **0**
-- V5 vs burned 98-query eval exact overlap: **0** (excluded 0 exact, 1 reordered near-duplicates at Jaccard >= 0.90)
+- V5 vs burned 98-query eval exact overlap: **0** (excluded 0 exact, 1 reordered near-duplicates at Jaccard >= 0.90, 5 curated blocklist hits)
 - Excluded against V4 val: **5**, against V4 test: **7**
-- Duplicate (same canonical query) removed: **44**
+- Duplicate (same canonical query) removed: **43**
+- Token-reordered duplicates removed: **4**
 - Ungrounded positives removed: **1**
 - set_volume template cap: max **2** per digit-normalized template, removed **95**
+- Cross-split same-label near-duplicates replaced (Jaccard >= 0.85): **2**, backfilled from train: **2**, unresolved: **0**
 
 ## 5. Conflict audit
 
-No conflicting labels found for any canonical query.
+- Exact-label conflicts (same canonical query, different label): **0**
+- Reorder conflicts (same word multiset, different label): **0**
+
+No conflicting labels found for any canonical query, exact or reordered.
 
 ## 6. Near-duplicate findings
 
 - Similar-but-different-label pairs (Jaccard >= 0.80): **0** (these are the intended contrast pairs, plus any accidents)
-- Near-identical same-label pairs across different splits (Jaccard >= 0.85): **6**
+- Near-identical same-label pairs across different splits (Jaccard >= 0.85): **0**
 
-Cross-split near-identical (same label):
-
-- temporarily stop playback (train) ~ stop playback temporarily (val)
-- turn the sound off (train) ~ turn off the sound (test)
-- bring the sound back (train) ~ bring back the sound (test)
-- turn on the sound (train) ~ turn the sound on (val)
-- how much space do i have (train) ~ how much disk space do i have (val)
-- how much space do i have (train) ~ how much free space do i have (test)
-
-### Near-duplicates against the burned fresh-eval set (Jaccard >= 0.60): **31**
+### Near-duplicates against the burned fresh-eval set (Jaccard >= 0.60): **9**
 
 | V5 query | split | label | closest burned query | Jaccard |
 | --- | --- | --- | --- | ---: |
-| bring up calculator | train | launch_app | bring up the calculator | 0.75 |
-| how hard is the processor working | val | get_cpu_usage | how hard is the processor working right now | 0.75 |
-| back one track | test | media_previous | back up one track | 0.75 |
-| what level is the volume at | val | get_volume | what number is the volume at | 0.714 |
 | what s the capital of australia | val | <none> | what s the capital of france | 0.714 |
 | how much charge is left | train | get_battery_status | how much juice is left | 0.667 |
 | how much battery is left | train | get_battery_status | how much juice is left | 0.667 |
-| charge remaining | train | get_battery_status | report charge remaining | 0.667 |
 | how busy is my processor | train | get_cpu_usage | how busy is my cpu | 0.667 |
-| processor load | train | get_cpu_usage | processor load please | 0.667 |
 | how much storage is left | train | get_disk_usage | how much juice is left | 0.667 |
-| bring up the file explorer | train | launch_app | open up the file explorer | 0.667 |
-| fire the music back up | train | media_play | fire up the music again | 0.667 |
-| start the music up again | train | media_play | fire up the music again | 0.667 |
-| carry on with the album | train | media_play | carry on with the track | 0.667 |
+| how full is the drive | val | get_disk_usage | is the c drive full | 0.667 |
+| how much ram is left | val | get_memory_usage | how much juice is left | 0.667 |
+| go back one track | test | media_previous | back up one track | 0.6 |
+| move back one track | test | media_previous | back up one track | 0.6 |
+
+Review policy: matches at >= 0.60 that reused distinctive burned phrasing or were a minimally
+altered version of a burned query were removed (curated blocklist) or reworded in the seed
+file. The remaining matches below share only common wording while testing the same intent
+with a different key noun or verb, so they are kept.
+
+Curated blocklist (carried-over V4 phrasings dropped, with the burned query each shadowed):
+
+- `bring the sound back`  shadows  `bring the audio back`
+- `bring up calculator`  shadows  `bring up the calculator`
+- `bring up the notepad`  shadows  `bring up the calculator`
+- `open file explorer`  shadows  `open up the file explorer`
+- `what level is the volume at`  shadows  `what number is the volume at`
 
 ## 7. Overrepresentation warnings
 

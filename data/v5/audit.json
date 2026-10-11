@@ -1,0 +1,257 @@
+{
+  "generated_by": "scripts/prepare_v5_dataset.py",
+  "core_tools": [
+    "get_system_stats",
+    "get_cpu_usage",
+    "get_memory_usage",
+    "get_disk_usage",
+    "get_battery_status",
+    "get_volume",
+    "set_volume",
+    "mute",
+    "unmute",
+    "media_play",
+    "media_pause",
+    "media_next",
+    "media_previous",
+    "launch_app",
+    "close_app",
+    "get_running_apps",
+    "search_files"
+  ],
+  "totals": {
+    "candidates": 932,
+    "kept_after_exclusion": 914,
+    "after_set_volume_cap": 819,
+    "after_dedup": 772,
+    "pool_positives": 666,
+    "pool_negatives": 105,
+    "positives": 664,
+    "negatives": 105,
+    "train": 537,
+    "val": 116,
+    "test": 116
+  },
+  "provenance": {
+    "v4": 324,
+    "v5": 445
+  },
+  "split_positives": {
+    "train": 464,
+    "val": 100,
+    "test": 100
+  },
+  "split_negatives": {
+    "train": 73,
+    "val": 16,
+    "test": 16
+  },
+  "block_counts": {
+    "B10_volume_media_boundary": 22,
+    "B1_play_vs_pause": 47,
+    "B2_mute_vs_unmute": 38,
+    "B3_next_vs_previous": 40,
+    "B4_system_intra_family": 56,
+    "B5_battery_indirect": 22,
+    "B5b_disk_cpu_ram_indirect": 14,
+    "B6_volume_read_vs_write": 42,
+    "B7_search_vs_launch": 59,
+    "B8_abstention": 45,
+    "B9_cross_family_hard_negatives": 20,
+    "OFF_TOPIC": 40
+  },
+  "per_intent": {
+    "train": {
+      "<none>": 73,
+      "close_app": 25,
+      "get_battery_status": 32,
+      "get_cpu_usage": 16,
+      "get_disk_usage": 23,
+      "get_memory_usage": 21,
+      "get_running_apps": 17,
+      "get_system_stats": 16,
+      "get_volume": 32,
+      "launch_app": 43,
+      "media_next": 23,
+      "media_pause": 30,
+      "media_play": 33,
+      "media_previous": 22,
+      "mute": 24,
+      "search_files": 46,
+      "set_volume": 39,
+      "unmute": 22
+    },
+    "val": {
+      "<none>": 16,
+      "close_app": 5,
+      "get_battery_status": 7,
+      "get_cpu_usage": 4,
+      "get_disk_usage": 6,
+      "get_memory_usage": 4,
+      "get_running_apps": 3,
+      "get_system_stats": 3,
+      "get_volume": 7,
+      "launch_app": 9,
+      "media_next": 5,
+      "media_pause": 7,
+      "media_play": 7,
+      "media_previous": 5,
+      "mute": 5,
+      "search_files": 10,
+      "set_volume": 8,
+      "unmute": 5
+    },
+    "test": {
+      "<none>": 16,
+      "close_app": 5,
+      "get_battery_status": 7,
+      "get_cpu_usage": 4,
+      "get_disk_usage": 6,
+      "get_memory_usage": 4,
+      "get_running_apps": 3,
+      "get_system_stats": 3,
+      "get_volume": 7,
+      "launch_app": 9,
+      "media_next": 5,
+      "media_pause": 7,
+      "media_play": 7,
+      "media_previous": 5,
+      "mute": 5,
+      "search_files": 10,
+      "set_volume": 8,
+      "unmute": 5
+    },
+    "all": {
+      "<none>": 105,
+      "close_app": 35,
+      "get_battery_status": 46,
+      "get_cpu_usage": 24,
+      "get_disk_usage": 35,
+      "get_memory_usage": 29,
+      "get_running_apps": 23,
+      "get_system_stats": 22,
+      "get_volume": 46,
+      "launch_app": 61,
+      "media_next": 33,
+      "media_pause": 44,
+      "media_play": 47,
+      "media_previous": 32,
+      "mute": 34,
+      "search_files": 66,
+      "set_volume": 55,
+      "unmute": 32
+    }
+  },
+  "exclusions": {
+    "burned": 0,
+    "burned_near": 1,
+    "blocklisted": 5,
+    "old_val": 5,
+    "old_test": 7
+  },
+  "set_volume_cap": {
+    "max_per_template": 2,
+    "removed": 95
+  },
+  "duplicates_removed": 43,
+  "sorted_duplicates_removed": 4,
+  "ungrounded_removed": 1,
+  "conflicts": [],
+  "reorder_conflicts": [],
+  "cross_split_resolution": {
+    "replaced": [
+      "how much free space do I have",
+      "how much disk space do I have"
+    ],
+    "backfilled": [
+      "check free disk space",
+      "how many gigs are free"
+    ],
+    "unresolved": []
+  },
+  "exact_overlap": {
+    "train_val": [],
+    "train_test": [],
+    "val_test": []
+  },
+  "v5_vs_burned_exact": 0,
+  "near_duplicate_risky": [],
+  "near_duplicate_risky_count": 0,
+  "near_duplicate_cross_split_same_label": [],
+  "near_duplicate_cross_split_count": 0,
+  "burned_near_duplicate": [
+    {
+      "query": "what s the capital of australia",
+      "split": "val",
+      "label": "<none>",
+      "burned": "what s the capital of france",
+      "jaccard": 0.714
+    },
+    {
+      "query": "how much charge is left",
+      "split": "train",
+      "label": "get_battery_status",
+      "burned": "how much juice is left",
+      "jaccard": 0.667
+    },
+    {
+      "query": "how much battery is left",
+      "split": "train",
+      "label": "get_battery_status",
+      "burned": "how much juice is left",
+      "jaccard": 0.667
+    },
+    {
+      "query": "how busy is my processor",
+      "split": "train",
+      "label": "get_cpu_usage",
+      "burned": "how busy is my cpu",
+      "jaccard": 0.667
+    },
+    {
+      "query": "how much storage is left",
+      "split": "train",
+      "label": "get_disk_usage",
+      "burned": "how much juice is left",
+      "jaccard": 0.667
+    },
+    {
+      "query": "how full is the drive",
+      "split": "val",
+      "label": "get_disk_usage",
+      "burned": "is the c drive full",
+      "jaccard": 0.667
+    },
+    {
+      "query": "how much ram is left",
+      "split": "val",
+      "label": "get_memory_usage",
+      "burned": "how much juice is left",
+      "jaccard": 0.667
+    },
+    {
+      "query": "go back one track",
+      "split": "test",
+      "label": "media_previous",
+      "burned": "back up one track",
+      "jaccard": 0.6
+    },
+    {
+      "query": "move back one track",
+      "split": "test",
+      "label": "media_previous",
+      "burned": "back up one track",
+      "jaccard": 0.6
+    }
+  ],
+  "burned_near_duplicate_count": 9,
+  "overrepresentation": [],
+  "largest_class": {
+    "name": "search_files",
+    "count": 66
+  },
+  "smallest_class": {
+    "name": "get_system_stats",
+    "count": 22
+  }
+}

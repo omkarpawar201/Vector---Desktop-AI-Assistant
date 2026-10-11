@@ -134,16 +134,18 @@ class Tier0Matcher:
     }
 
     # Volume extraction regex patterns (e.g., "set volume to 40", "volume 40%", "set sound 50")
+    #: The unit accepts the percent sign or its spoken form ("percent"/"per cent"),
+    #: so "volume at 100 percent" is caught here instead of being handed to the model.
     SET_VOLUME_REGEXES = [
-        re.compile(r"^(?:set|make|change)?\s*(?:the)?\s*(?:volume|sound)\s*(?:to|at)?\s*(\d{1,3})\s*%?$"),
-        re.compile(r"^(?:volume|sound)\s*(\d{1,3})\s*%?$"),
+        re.compile(r"^(?:set|make|change)?\s*(?:the)?\s*(?:volume|sound)\s*(?:to|at)?\s*(\d{1,3})\s*(?:%|percent|per cent)?$"),
+        re.compile(r"^(?:volume|sound)\s*(\d{1,3})\s*(?:%|percent|per cent)?$"),
     ]
 
     #: Directional phrasings that still name an absolute level, e.g. "volume up
     #: to 50" is a set, not a report.
     SET_VOLUME_VERB_REGEXES = [
         re.compile(r"^(?:volume|sound)\s*(?:up|down)\s*(?:to)?\s*(\d{1,3})\s*%?$"),
-        re.compile(r"^(?:turn|raise|lower|put|bump|crank)\s*(?:it|the\s+(?:volume|sound))?\s*"
+        re.compile(r"^(?:turn|raise|lower|put|bump|crank|bring)\s*(?:it|the\s+(?:volume|sound))?\s*"
                    r"(?:up|down)?\s*(?:to)?\s*(\d{1,3})\s*%?$"),
     ]
 

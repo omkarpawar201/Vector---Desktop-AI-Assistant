@@ -30,6 +30,20 @@ V4_TEST = ROOT / "data" / "vector_test.jsonl"
 V5_SEED_MOD = ROOT / "scripts" / "v5_seed_content.py"
 OUT_DIR = ROOT / "data" / "v5"
 
+# Canonical queries (lower-case, punctuation stripped) that shadow distinctive
+# phrasing of a burned fresh-eval query.  These are carried-over V4 examples
+# whose wording reuses a burned template with only a function word or the app
+# name swapped, so they are dropped rather than kept.  Each entry is annotated
+# with the burned query it shadows.  (V5-authored examples with the same problem
+# were rephrased directly in scripts/v5_seed_content.py instead.)
+BURNED_NEAR_BLOCKLIST = {
+    "bring up calculator": "bring up the calculator",          # launch_app
+    "bring up the notepad": "bring up the calculator",         # launch_app
+    "open file explorer": "open up the file explorer",         # launch_app
+    "what level is the volume at": "what number is the volume at",  # get_volume
+    "bring the sound back": "bring the audio back",            # unmute
+}
+
 CORE_TOOLS = [
     "get_system_stats", "get_cpu_usage", "get_memory_usage",
     "get_disk_usage", "get_battery_status",
@@ -266,11 +280,14 @@ def main():
 
     # -- exclusion of burned / old val / old test ---------------------------
     kept = []
-    drop = {"burned": 0, "burned_near": 0, "old_val": 0, "old_test": 0}
+    drop = {"burned": 0, "burned_near": 0, "blocklisted": 0, "old_val": 0, "old_test": 0}
     for c in candidates:
         k = canon_query(c["query"])
         if k in burned:
             drop["burned"] += 1
+            continue
+        if k in BURNED_NEAR_BLOCKLIST:
+            drop["blocklisted"] += 1
             continue
         if burned_list and any(jaccard(k, b) >= 0.9 for b in burned_list):
             drop["burned_near"] += 1
@@ -312,6 +329,21 @@ def main():
         label_of[key] = c
         deduped.append(c)
 
+    # Token-multiset dedup: "turn the sound off" == "turn off the sound".
+    # Same-label only, so a genuine cross-label reorder would surface as a
+    # conflict below rather than being silently dropped.
+    seen_sorted = set()
+    _sorted_deduped = []
+    sorted_duplicate_removed = 0
+    for c in deduped:
+        sk = (tuple(sorted(canon_query(c["query"]).split())), c["intent"] or "<none>")
+        if sk in seen_sorted:
+            sorted_duplicate_removed += 1
+            continue
+        seen_sorted.add(sk)
+        _sorted_deduped.append(c)
+    deduped = _sorted_deduped
+
     conflict_records = []
     for key, labels in conflicts.items():
         distinct = {l for l, _ in labels}
@@ -322,6 +354,16 @@ def main():
                 "chosen": label_of[key]["intent"] or "<none>",
                 "provenance": sorted({p for _, p in labels}),
             })
+
+    # Reorder conflicts: same word multiset, different label.
+    sorted_labels = defaultdict(set)
+    for c in capped:
+        sorted_labels[" ".join(sorted(canon_query(c["query"]).split()))].add(
+            c["intent"] or "<none>")
+    reorder_conflicts = [
+        {"query": k, "labels": sorted(v)}
+        for k, v in sorted_labels.items() if len(v) > 1
+    ]
 
     # -- grounding (drop positives with no extractable argument) ------------
     positives = []
@@ -370,6 +412,70 @@ def main():
     neg_test = negatives[:m_test]
     neg_val = negatives[m_test:m_test + m_val]
     neg_train = negatives[m_test + m_val:]
+
+    # -- resolve cross-split same-label near-duplicates ----------------------
+    # A val/test example that duplicates a train phrasing only inflates the
+    # held-out score, so it is replaced by a different same-intent example moved
+    # down from train (backfill keeps split sizes stable).  Loops until stable.
+    XS_THRESH = 0.85
+    xs_replaced = []
+    xs_backfilled = []
+    pending = []
+    for _ in range(25):
+        removed = 0
+        for name in ("test", "val"):
+            lst = test if name == "test" else val
+            kept_split = []
+            for e in lst:
+                cq = canon_query(e["query"])
+                dup = any(
+                    x["intent"] == e["intent"]
+                    and canon_query(x["query"]) != cq
+                    and jaccard(cq, canon_query(x["query"])) >= XS_THRESH
+                    for x in train
+                )
+                if dup:
+                    pending.append((name, e["intent"], e["query"]))
+                    xs_replaced.append(e["query"])
+                    removed += 1
+                else:
+                    kept_split.append(e)
+            if name == "test":
+                test = kept_split
+            else:
+                val = kept_split
+        filled = 0
+        still = []
+        held = val + test
+        for (name, intent, q) in pending:
+            cand = None
+            for c in train:
+                if c["intent"] != intent:
+                    continue
+                cq = canon_query(c["query"])
+                if any(jaccard(cq, canon_query(x["query"])) >= XS_THRESH for x in held):
+                    continue
+                if any(
+                    x is not c
+                    and x["intent"] == intent
+                    and jaccard(cq, canon_query(x["query"])) >= XS_THRESH
+                    for x in train
+                ):
+                    continue
+                cand = c
+                break
+            if cand:
+                train.remove(cand)
+                (test if name == "test" else val).append(cand)
+                held.append(cand)
+                xs_backfilled.append(cand["query"])
+                filled += 1
+            else:
+                still.append((name, intent, q))
+        pending = still
+        if removed == 0 and filled == 0:
+            break
+    xs_unresolved = pending
 
     groups = list(TOOL_GROUPS)
 
@@ -525,8 +631,10 @@ def main():
             "kept_after_exclusion": len(kept),
             "after_set_volume_cap": len(capped),
             "after_dedup": len(deduped),
-            "positives": len(positives),
-            "negatives": len(negatives),
+            "pool_positives": len(positives),
+            "pool_negatives": len(negatives),
+            "positives": sum(split_pos.values()),
+            "negatives": sum(split_neg.values()),
             "train": len(train), "val": len(val), "test": len(test),
         },
         "provenance": dict(prov_counts),
@@ -537,8 +645,15 @@ def main():
         "exclusions": drop,
         "set_volume_cap": {"max_per_template": MAX_PER_TPL, "removed": cap_removed},
         "duplicates_removed": duplicate_removed,
+        "sorted_duplicates_removed": sorted_duplicate_removed,
         "ungrounded_removed": ungrounded,
         "conflicts": conflict_records,
+        "reorder_conflicts": reorder_conflicts,
+        "cross_split_resolution": {
+            "replaced": xs_replaced,
+            "backfilled": xs_backfilled,
+            "unresolved": [list(x) for x in xs_unresolved],
+        },
         "exact_overlap": {
             "train_val": overlap_tv,
             "train_test": overlap_tt,
@@ -571,8 +686,8 @@ def main():
     L.append(f"- Candidate examples assembled: **{t['candidates']}**")
     L.append(f"- After burned/val/test exclusion: **{t['kept_after_exclusion']}**")
     L.append(f"- After set_volume template cap: **{t['after_set_volume_cap']}**")
-    L.append(f"- After exact dedup: **{t['after_dedup']}**")
-    L.append(f"- Final positives: **{t['positives']}**, negatives: **{t['negatives']}**")
+    L.append(f"- After exact + token-multiset dedup: **{t['after_dedup']}**")
+    L.append(f"- Final positives: **{t['positives']}**, negatives: **{t['negatives']}** (pool before cross-split resolution: {t['pool_positives']} pos / {t['pool_negatives']} neg)")
     L.append("")
     L.append(f"- Train: **{t['train']}**  (positive {split_pos['train']} / negative {split_neg['train']})")
     L.append(f"- Validation: **{t['val']}**  (positive {split_pos['val']} / negative {split_neg['val']})")
@@ -609,23 +724,35 @@ def main():
     L.append(f"- Exact train/val overlap: **{len(overlap_tv)}**")
     L.append(f"- Exact train/test overlap: **{len(overlap_tt)}**")
     L.append(f"- Exact val/test overlap: **{len(overlap_vt)}**")
-    L.append(f"- V5 vs burned 98-query eval exact overlap: **0** (excluded {drop['burned']} exact, {drop['burned_near']} reordered near-duplicates at Jaccard >= 0.90)")
+    L.append(f"- V5 vs burned 98-query eval exact overlap: **0** (excluded {drop['burned']} exact, {drop['burned_near']} reordered near-duplicates at Jaccard >= 0.90, {drop['blocklisted']} curated blocklist hits)")
     L.append(f"- Excluded against V4 val: **{drop['old_val']}**, against V4 test: **{drop['old_test']}**")
     L.append(f"- Duplicate (same canonical query) removed: **{duplicate_removed}**")
+    L.append(f"- Token-reordered duplicates removed: **{sorted_duplicate_removed}**")
     L.append(f"- Ungrounded positives removed: **{ungrounded}**")
     L.append(f"- set_volume template cap: max **{MAX_PER_TPL}** per digit-normalized template, removed **{cap_removed}**")
+    L.append(f"- Cross-split same-label near-duplicates replaced (Jaccard >= 0.85): **{len(xs_replaced)}**, backfilled from train: **{len(xs_backfilled)}**, unresolved: **{len(xs_unresolved)}**")
     L.append("")
     L.append("## 5. Conflict audit")
     L.append("")
-    if not conflict_records:
-        L.append("No conflicting labels found for any canonical query.")
-    else:
+    L.append(f"- Exact-label conflicts (same canonical query, different label): **{len(conflict_records)}**")
+    L.append(f"- Reorder conflicts (same word multiset, different label): **{len(reorder_conflicts)}**")
+    L.append("")
+    if conflict_records:
         L.append(f"**{len(conflict_records)}** canonical queries map to more than one label.")
         L.append("")
         L.append("| Query | Labels | Chosen | Provenance |")
         L.append("| --- | --- | --- | --- |")
         for c in conflict_records[:60]:
             L.append(f"| {c['query']} | {', '.join(c['labels'])} | {c['chosen']} | {', '.join(c['provenance'])} |")
+        L.append("")
+    if reorder_conflicts:
+        L.append("Reorder conflicts:")
+        L.append("")
+        for c in reorder_conflicts[:30]:
+            L.append(f"- {c['query']} -> {', '.join(c['labels'])}")
+        L.append("")
+    if not conflict_records and not reorder_conflicts:
+        L.append("No conflicting labels found for any canonical query, exact or reordered.")
     L.append("")
     L.append("## 6. Near-duplicate findings")
     L.append("")
@@ -657,6 +784,16 @@ def main():
     else:
         L.append("No V5 query is a near-duplicate of any burned-eval query at this threshold.")
         L.append("")
+    L.append("Review policy: matches at >= 0.60 that reused distinctive burned phrasing or were a minimally")
+    L.append("altered version of a burned query were removed (curated blocklist) or reworded in the seed")
+    L.append("file. The remaining matches below share only common wording while testing the same intent")
+    L.append("with a different key noun or verb, so they are kept.")
+    L.append("")
+    L.append("Curated blocklist (carried-over V4 phrasings dropped, with the burned query each shadowed):")
+    L.append("")
+    for _q, _b in sorted(BURNED_NEAR_BLOCKLIST.items()):
+        L.append(f"- `{_q}`  shadows  `{_b}`")
+    L.append("")
     L.append("## 7. Overrepresentation warnings")
     L.append("")
     if not overrep:
