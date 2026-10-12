@@ -24,6 +24,11 @@ PyAudioWPatch>=0.2.12
 # the audio packages above (installed only on 3.13+).
 audioop-lts>=0.2.2 ; python_version >= "3.13"
 
+# Optional offline speech recognition (Milestone 3A). Opt-in only: the default
+# voice_stt_backend is "online", so this is not required for the normal pipeline.
+# Uncomment/install only when you enable voice_stt_backend = offline|auto.
+# sherpa-onnx>=1.13.8
+
 # Testing Framework
 pytest>=7.4.0
 pytest-asyncio>=0.23.0

@@ -5,6 +5,7 @@ Loads values from environment variables and .env file using Pydantic Settings.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -57,6 +58,20 @@ class Settings(BaseSettings):
     require_confirmation_for_dangerous: bool = Field(
         default=True,
         description="Require UI user confirmation modal for dangerous actions"
+    )
+
+    # Voice Speech-to-Text Backend
+    voice_stt_backend: Literal["online", "offline", "auto"] = Field(
+        default="online",
+        description=(
+            "Speech-to-text backend: 'online' (existing Google recognizer, default), "
+            "'offline' (local sherpa-onnx only; never touches the network), or "
+            "'auto' (prefer offline, fall back to online when offline is unavailable)"
+        )
+    )
+    voice_stt_model_dir: str = Field(
+        default="models/stt",
+        description="Directory holding the local sherpa-onnx offline STT model (kept out of Git)"
     )
 
     # System Paths & Logging

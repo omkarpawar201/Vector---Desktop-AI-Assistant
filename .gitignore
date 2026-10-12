@@ -40,6 +40,9 @@ models/libneedle.dll
 models/*.cact
 models/needle2/*.cact
 
+# Local offline STT models (Milestone 3A) - never committed
+models/stt/
+
 # Traning checkpoints
 checkpoints/*.safetensors
 

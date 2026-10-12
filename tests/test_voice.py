@@ -13,13 +13,15 @@ import types
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from app.config.settings import Settings
 from app.core.router import IntentRouter
 from app.tools.registry import ToolRegistry
 from app.voice.listener import VoiceListener
-from app.voice.stt import STTEngine
+from app.voice.stt import STTEngine, _SherpaOfflineBackend
 from app.voice.tts import TTSEngine
 from app.voice.vad import VADEngine
 
@@ -125,21 +127,36 @@ class _FakeAudioFile:
         return False
 
 
+class _FakeAudioData:
+    """Stands in for speech_recognition.AudioData; holds synthetic PCM only."""
+
+    def __init__(self, raw: bytes = b"\x01\x00" * 160):
+        self.raw = raw
+        self.conversions = []
+
+    def get_raw_data(self, convert_rate=None, convert_width=None):
+        self.conversions.append((convert_rate, convert_width))
+        return self.raw
+
+
 class _FakeRecognizer:
-    def __init__(self, phrase="hello vector", fail=None):
+    def __init__(self, phrase="hello vector", fail=None, audio=None):
         self._phrase = phrase
         self._fail = fail
+        self._audio = audio
+        self.google_calls = 0
 
     def record(self, source):
-        return b"audio"
+        return _FakeAudioData()
 
     def adjust_for_ambient_noise(self, source, duration=0.3):
         return None
 
     def listen(self, source, timeout=None, phrase_time_limit=None):
-        return b"audio"
+        return self._audio if self._audio is not None else _FakeAudioData()
 
     def recognize_google(self, audio):
+        self.google_calls += 1
         if self._fail is not None:
             raise self._fail
         return self._phrase
@@ -246,6 +263,233 @@ def test_listen_and_transcribe_mic_capture_failure(monkeypatch, caplog):
         assert STTEngine().listen_and_transcribe_mic() == ""
 
     assert any("microphone capture failed" in r.message for r in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# Offline (sherpa-onnx) backend selection, adapter conversion, and fallback
+# --------------------------------------------------------------------------
+
+class _FakeOfflineBackend:
+    def __init__(self, text="offline text", error=None):
+        self.text = text
+        self.error = error
+        self.pcm_calls = []
+        self.file_calls = []
+
+    def transcribe_pcm(self, pcm, sample_rate=None):
+        self.pcm_calls.append((pcm, sample_rate))
+        if self.error is not None:
+            raise self.error
+        return self.text
+
+    def transcribe_file(self, path):
+        self.file_calls.append(path)
+        if self.error is not None:
+            raise self.error
+        return self.text
+
+
+def _inject_offline(engine, fake):
+    """Skip real model loading; install a fake adapter as if it were built."""
+    engine._offline_backend = fake
+    engine._offline_attempted = True
+    return fake
+
+
+def test_backend_defaults_to_online():
+    assert STTEngine().backend == "online"
+
+
+def test_backend_override_is_honored():
+    assert STTEngine(backend="offline").backend == "offline"
+    assert STTEngine(backend="auto").backend == "auto"
+
+
+def test_backend_setting_rejects_invalid_value():
+    with pytest.raises(ValidationError):
+        Settings(voice_stt_backend="bogus")
+
+
+def test_backend_setting_accepts_valid_values():
+    for value in ("online", "offline", "auto"):
+        assert Settings(voice_stt_backend=value).voice_stt_backend == value
+
+
+def test_offline_missing_package_returns_empty_without_online(tmp_path, monkeypatch, caplog):
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)  # forces ImportError
+    rec = _FakeRecognizer(phrase="must not be used")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+
+    engine = STTEngine(backend="offline", model_dir=str(tmp_path))
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        result = engine.listen_and_transcribe_mic()
+
+    assert result == ""
+    assert rec.google_calls == 0, "offline mode must never invoke online recognition"
+    assert any("sherpa_onnx" in r.message for r in caplog.records)
+
+
+def test_offline_missing_model_dir_returns_empty(tmp_path, monkeypatch, caplog):
+    rec = _FakeRecognizer(phrase="must not be used")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+
+    engine = STTEngine(backend="offline", model_dir=str(tmp_path / "does_not_exist"))
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        assert engine.listen_and_transcribe_mic() == ""
+
+    assert rec.google_calls == 0
+    assert any("model directory not found" in r.message for r in caplog.records)
+
+
+def test_offline_mic_success_uses_offline_only(monkeypatch):
+    audio = _FakeAudioData(raw=b"\x10\x27" * 32)
+    rec = _FakeRecognizer(audio=audio)
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    fake = _FakeOfflineBackend(text="  open chrome  ")
+
+    engine = STTEngine(backend="offline")
+    _inject_offline(engine, fake)
+
+    assert engine.listen_and_transcribe_mic() == "open chrome"
+    assert rec.google_calls == 0
+    assert fake.pcm_calls == [(audio.raw, engine.sample_rate)]
+    assert audio.conversions == [(engine.sample_rate, 2)]
+
+
+def test_offline_failure_strict_returns_empty_without_online(monkeypatch, caplog):
+    rec = _FakeRecognizer(phrase="must not appear")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    fake = _FakeOfflineBackend(error=RuntimeError("boom"))
+
+    engine = STTEngine(backend="offline")
+    _inject_offline(engine, fake)
+
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        assert engine.listen_and_transcribe_mic() == ""
+
+    assert rec.google_calls == 0
+    assert any("transcription failed" in r.message for r in caplog.records)
+
+
+def test_auto_prefers_offline_when_available(monkeypatch):
+    rec = _FakeRecognizer(phrase="online result")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    fake = _FakeOfflineBackend(text="offline result")
+
+    engine = STTEngine(backend="auto")
+    _inject_offline(engine, fake)
+
+    assert engine.listen_and_transcribe_mic() == "offline result"
+    assert rec.google_calls == 0
+
+
+def test_auto_falls_back_to_online_when_offline_fails(monkeypatch, caplog):
+    rec = _FakeRecognizer(phrase="online result")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    fake = _FakeOfflineBackend(error=RuntimeError("boom"))
+
+    engine = STTEngine(backend="auto")
+    _inject_offline(engine, fake)
+
+    with caplog.at_level("INFO", logger="app.voice.stt"):
+        assert engine.listen_and_transcribe_mic() == "online result"
+
+    assert rec.google_calls == 1
+    assert any("falling back" in r.message for r in caplog.records)
+
+
+def test_transcribe_file_offline_success(tmp_path, monkeypatch):
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFFxxxx")
+    rec = _FakeRecognizer(phrase="online must not run")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    fake = _FakeOfflineBackend(text="offline file text")
+
+    engine = STTEngine(backend="offline")
+    _inject_offline(engine, fake)
+
+    assert engine.transcribe_file(str(wav)) == "offline file text"
+    assert rec.google_calls == 0
+    assert fake.file_calls == [str(wav.resolve())]
+
+
+def test_transcribe_file_offline_missing_backend_returns_empty(tmp_path, monkeypatch, caplog):
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFFxxxx")
+    rec = _FakeRecognizer(phrase="online must not run")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
+
+    engine = STTEngine(backend="offline", model_dir=str(tmp_path))
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        assert engine.transcribe_file(str(wav)) == ""
+
+    assert rec.google_calls == 0
+
+
+def _bare_adapter(recognizer_obj):
+    """Build an adapter without importing sherpa-onnx (no real model)."""
+    backend = object.__new__(_SherpaOfflineBackend)
+    backend.sample_rate = 16000
+    backend._sherpa = None
+    backend.recognizer = recognizer_obj
+    return backend
+
+
+class _CapturingStream:
+    def __init__(self, captured):
+        self._captured = captured
+        self.result = types.SimpleNamespace(text="decoded")
+
+    def accept_waveform(self, sample_rate, samples):
+        self._captured["sample_rate"] = sample_rate
+        self._captured["samples"] = samples
+
+
+class _CapturingRecognizer:
+    def __init__(self, captured):
+        self._captured = captured
+
+    def create_stream(self):
+        return _CapturingStream(self._captured)
+
+    def decode_stream(self, stream):
+        self._captured["decoded"] = True
+
+
+def test_offline_adapter_converts_int16_pcm_to_float32():
+    captured = {}
+    backend = _bare_adapter(_CapturingRecognizer(captured))
+
+    pcm = struct.pack("<4h", -32768, -1, 0, 32767)
+    text = backend.transcribe_pcm(pcm, 16000)
+
+    assert text == "decoded"
+    assert captured["sample_rate"] == 16000
+    assert captured["decoded"] is True
+    samples = captured["samples"]
+    assert samples.dtype == np.float32
+    assert samples[0] == pytest.approx(-1.0)
+    assert samples[3] == pytest.approx(32767 / 32768)
+
+
+def test_offline_adapter_downmixes_stereo_wav(tmp_path):
+    import wave
+
+    path = tmp_path / "stereo.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(struct.pack("<8h", 1, 2, 3, 4, 5, 6, 7, 8))
+
+    captured = {}
+    backend = _bare_adapter(_CapturingRecognizer(captured))
+    text = backend.transcribe_file(str(path))
+
+    assert text == "decoded"
+    samples = captured["samples"]
+    assert np.allclose(samples, np.array([1, 3, 5, 7], dtype=np.float32) / 32768.0)
 
 
 # --------------------------------------------------------------------------
