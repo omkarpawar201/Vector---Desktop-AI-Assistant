@@ -10,6 +10,7 @@ import os
 import struct
 import sys
 import types
+from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -140,19 +141,29 @@ class _FakeAudioData:
 
 
 class _FakeRecognizer:
-    def __init__(self, phrase="hello vector", fail=None, audio=None):
+    def __init__(self, phrase="hello vector", fail=None, audio=None, events=None, calibration_fail=None):
         self._phrase = phrase
         self._fail = fail
         self._audio = audio
+        self._events = events if events is not None else []
+        self._calibration_fail = calibration_fail
         self.google_calls = 0
+        self.calibrations = 0
+        self.listen_calls = 0
 
     def record(self, source):
         return _FakeAudioData()
 
     def adjust_for_ambient_noise(self, source, duration=0.3):
+        self.calibrations += 1
+        self._events.append("calibrate")
+        if self._calibration_fail is not None:
+            raise self._calibration_fail
         return None
 
     def listen(self, source, timeout=None, phrase_time_limit=None):
+        self.listen_calls += 1
+        self._events.append("listen")
         return self._audio if self._audio is not None else _FakeAudioData()
 
     def recognize_google(self, audio):
@@ -262,6 +273,36 @@ def test_listen_and_transcribe_mic_capture_failure(monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="app.voice.stt"):
         assert STTEngine().listen_and_transcribe_mic() == ""
 
+    assert any("microphone capture failed" in r.message for r in caplog.records)
+
+
+def test_mic_calibration_completes_before_prompt_and_recording(monkeypatch):
+    """
+    The user must not be prompted to speak while ambient calibration is still
+    consuming microphone audio; recording starts only after the prompt.
+    """
+    events = []
+    rec = _FakeRecognizer(phrase="turn up the volume", events=events)
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+
+    result = STTEngine().listen_and_transcribe_mic(on_ready=lambda: events.append("prompt"))
+
+    assert result == "turn up the volume"
+    assert events.index("calibrate") < events.index("prompt") < events.index("listen")
+    assert rec.calibrations == 1, "ambient calibration must run exactly once per capture"
+
+
+def test_mic_prompt_and_recording_skipped_when_calibration_fails(monkeypatch, caplog):
+    events = []
+    rec = _FakeRecognizer(events=events, calibration_fail=RuntimeError("ambient noise"))
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        result = STTEngine().listen_and_transcribe_mic(on_ready=lambda: events.append("prompt"))
+
+    assert result == ""
+    assert "prompt" not in events
+    assert "listen" not in events
     assert any("microphone capture failed" in r.message for r in caplog.records)
 
 
@@ -492,6 +533,79 @@ def test_offline_adapter_downmixes_stereo_wav(tmp_path):
     assert np.allclose(samples, np.array([1, 3, 5, 7], dtype=np.float32) / 32768.0)
 
 
+def _have_real_offline_model():
+    return Path("models/stt").is_dir() and Path("models/stt/test_wavs/0.wav").is_file()
+
+
+def test_real_offline_model_transcribes_bundled_wavs():
+    """
+    Integration test: loads the actual sherpa-onnx model from models/stt/ and
+    decodes the bundled test WAVs. Never uses the microphone, Google
+    recognition, Gemini, or any streaming API.
+    """
+    pytest.importorskip("sherpa_onnx")
+    model_dir = Path("models/stt")
+    if not _have_real_offline_model():
+        pytest.skip("offline STT model not installed (models/stt)")
+
+    engine = STTEngine(backend="offline", model_dir=str(model_dir))
+    text_16k = engine.transcribe_file(str(model_dir / "test_wavs" / "0.wav"))
+    assert text_16k, "real offline model produced empty transcription for 16k wav"
+    assert "NIGHTFALL" in text_16k.upper()
+
+    text_8k = engine.transcribe_file(str(model_dir / "test_wavs" / "8k.wav"))
+    assert text_8k, "real offline model produced empty transcription for 8k wav"
+    assert "HESTER" in text_8k.upper()
+
+
+def test_real_offline_model_strict_offline_never_invokes_online(monkeypatch):
+    """
+    With the real model loaded and backend='offline', any attempt to reach the
+    online recognizer (SpeechRecognition / Google) must fail loudly.
+    """
+    pytest.importorskip("sherpa_onnx")
+    model_dir = Path("models/stt")
+    if not _have_real_offline_model():
+        pytest.skip("offline STT model not installed (models/stt)")
+
+    class _ForbidOnline:
+        def Recognizer(self):
+            raise AssertionError("online recognizer invoked in strict offline mode")
+
+        def AudioFile(self, *args, **kwargs):
+            raise AssertionError("online AudioFile invoked in strict offline mode")
+
+        def Microphone(self, *args, **kwargs):
+            raise AssertionError("online Microphone invoked in strict offline mode")
+
+    monkeypatch.setitem(sys.modules, "speech_recognition", _ForbidOnline())
+
+    engine = STTEngine(backend="offline", model_dir=str(model_dir))
+    text = engine.transcribe_file(str(model_dir / "test_wavs" / "0.wav"))
+    assert text, "real offline model produced empty transcription"
+    assert "NIGHTFALL" in text.upper()
+
+
+def test_offline_real_existing_dir_without_model_layout_returns_empty(monkeypatch, caplog):
+    """
+    Real behavior when model_dir exists but has no sherpa-onnx layout
+    (e.g. models/ holds only Needle artifacts): offline stays empty, no online.
+    """
+    pytest.importorskip("sherpa_onnx")
+    rec = _FakeRecognizer(phrase="must not be used")
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    wav = Path("models/stt/test_wavs/0.wav")
+    if not wav.is_file():
+        pytest.skip("offline STT test wav not installed")
+
+    engine = STTEngine(backend="offline", model_dir="models")
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        assert engine.transcribe_file(str(wav)) == ""
+
+    assert rec.google_calls == 0
+    assert any("failed to initialize" in r.message for r in caplog.records)
+
+
 # --------------------------------------------------------------------------
 # VoiceListener delegation
 # --------------------------------------------------------------------------
@@ -501,9 +615,11 @@ class _RecordingSTT(STTEngine):
         super().__init__()
         self._text = text
         self.calls = 0
+        self.received_ready = None
 
-    def listen_and_transcribe_mic(self, phrase_time_limit: int = 6) -> str:
+    def listen_and_transcribe_mic(self, phrase_time_limit: int = 6, on_ready=None) -> str:
         self.calls += 1
+        self.received_ready = on_ready
         return self._text
 
 
@@ -513,6 +629,18 @@ def test_voice_listener_delegates_to_stt():
 
     assert listener.listen_from_mic() == "open notepad"
     assert fake.calls == 1
+
+
+def test_voice_listener_forwards_ready_callback():
+    fake = _RecordingSTT("open notepad")
+    listener = VoiceListener(stt_engine=fake)
+    events = []
+
+    assert listener.listen_from_mic(on_ready=lambda: events.append("ready")) == "open notepad"
+    assert fake.received_ready is not None
+
+    fake.received_ready()
+    assert events == ["ready"]
 
 
 # --------------------------------------------------------------------------
@@ -614,5 +742,22 @@ def test_voice_toggle_enabled_starts_capture(qapp):
         win._handle_voice_toggle(True)
 
         assert len(started) == 1, "microphone capture worker was not started"
+    finally:
+        win.close()
+
+
+def test_voice_toggle_prompts_only_after_calibration_ready(qapp):
+    win, started = _window_with_voice(qapp, enable_voice=True)
+    try:
+        text_before = win.command_input.btn_mic.text()
+        win._handle_voice_toggle(True)
+
+        assert len(started) == 1
+        assert win.command_input.btn_mic.text() == text_before, (
+            "mic button must not prompt the user to speak before calibration completes"
+        )
+
+        started[0].signals.ready.emit()
+        assert win.command_input.btn_mic.text() == "🔴 Listening..."
     finally:
         win.close()

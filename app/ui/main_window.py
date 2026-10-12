@@ -48,9 +48,10 @@ from app.voice.tts import TTSEngine
 
 
 class WorkerSignals(QObject):
-    """Signals for background RouteWorker thread."""
+    """Signals for background Qt workers (routing and microphone capture)."""
     result = Signal(object)
     error = Signal(str)
+    ready = Signal()
 
 
 class RouteWorker(QRunnable):
@@ -86,7 +87,7 @@ class TranscribeWorker(QRunnable):
     @Slot()
     def run(self) -> None:
         try:
-            text = self.voice_listener.listen_from_mic()
+            text = self.voice_listener.listen_from_mic(on_ready=self.signals.ready.emit)
             self.signals.result.emit(text)
         except Exception as e:
             self.signals.error.emit(str(e))
@@ -202,8 +203,11 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.command_input.btn_mic.setText("🔴 Listening...")
+        # The "Listening..." prompt is shown only after ambient calibration has
+        # consumed its audio (ready signal), so the user never speaks into the
+        # calibration window.
         worker = TranscribeWorker(self.voice_listener)
+        worker.signals.ready.connect(lambda: self.command_input.btn_mic.setText("🔴 Listening..."))
         worker.signals.result.connect(self._on_transcribe_finished)
         worker.signals.error.connect(lambda err: self._reset_mic_btn())
         self.thread_pool.start(worker)

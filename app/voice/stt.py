@@ -257,9 +257,13 @@ class STTEngine:
             logger.warning("STT: faster-whisper failed (%s): %s", type(e).__name__, e)
             return ""
 
-    def listen_and_transcribe_mic(self, phrase_time_limit: int = 6) -> str:
+    def listen_and_transcribe_mic(self, phrase_time_limit: int = 6, on_ready=None) -> str:
         """
         Captures speech from the default Windows microphone and transcribes it.
+
+        ``on_ready`` is invoked once ambient calibration has finished and just
+        before recording starts, so callers can prompt the user to speak only
+        when the microphone is actually listening.
 
         Returns an empty string when nothing intelligible was captured or the
         backend is unavailable. In 'offline' mode the online recognizer is never
@@ -276,6 +280,8 @@ class STTEngine:
         try:
             with sr.Microphone() as source:
                 recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                if on_ready is not None:
+                    on_ready()
                 audio = recognizer.listen(source, timeout=5, phrase_time_limit=phrase_time_limit)
         except Exception as e:
             logger.warning("STT: microphone capture failed (%s): %s", type(e).__name__, e)

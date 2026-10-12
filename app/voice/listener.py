@@ -15,8 +15,11 @@ class VoiceListener:
         self.stt = stt_engine or STTEngine()
         self.is_recording = False
 
-    def listen_from_mic(self) -> str:
+    def listen_from_mic(self, on_ready=None) -> str:
         """
         Listens directly to the Windows microphone and transcribes spoken text.
+
+        ``on_ready`` is forwarded to the STT engine and invoked once ambient
+        calibration has finished, immediately before recording starts.
         """
-        return self.stt.listen_and_transcribe_mic(phrase_time_limit=6)
+        return self.stt.listen_and_transcribe_mic(phrase_time_limit=6, on_ready=on_ready)
