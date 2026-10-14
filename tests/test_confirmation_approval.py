@@ -17,6 +17,8 @@ or loads a model: every tool is a counting fake and the router's model clients
 are replaced with deterministic stand-ins.
 """
 
+import threading
+
 import pytest
 
 from app.config.constants import ExecutionState, IntentTier, PermissionLevel
@@ -44,10 +46,12 @@ class _CountingTool(BaseTool):
         self.permission_level = permission_level
         self.executions = 0
         self.seen_args = []
+        self._lock = threading.Lock()
 
     def execute(self, **kwargs):
-        self.executions += 1
-        self.seen_args.append(dict(kwargs))
+        with self._lock:
+            self.executions += 1
+            self.seen_args.append(dict(kwargs))
         return ToolResult.ok(tool=self.name, data={"done": True}, message=f"{self.name} executed")
 
 
@@ -55,6 +59,12 @@ _TARGET_SCHEMA = {
     "type": "object",
     "properties": {"target": {"type": "string"}},
     "required": ["target"],
+}
+
+_NESTED_SCHEMA = {
+    "type": "object",
+    "properties": {"options": {"type": "object"}},
+    "required": ["options"],
 }
 
 
@@ -196,6 +206,120 @@ def test_safe_tool_runs_without_approval(registry):
     assert res.success is True
     assert sm.current_state == ExecutionState.SUCCESS
     assert safe.executions == 1
+
+
+# --------------------------------------------------------------------------
+# Milestone B.1: atomic single-use consumption and tamper resistance
+# --------------------------------------------------------------------------
+
+def test_simultaneous_approvals_execute_exactly_once(registry):
+    confirm = _CountingTool("confirm_tool", PermissionLevel.CONFIRM, _TARGET_SCHEMA)
+    registry.register(confirm)
+    executor = SafeToolExecutor(registry=registry)
+
+    approval = PendingApproval(tool_name="confirm_tool", arguments={"target": "x"})
+
+    workers = 8
+    barrier = threading.Barrier(workers)
+    outcomes = []
+    outcomes_lock = threading.Lock()
+
+    def _race():
+        barrier.wait()
+        res, _sm = executor.execute_approved(approval)
+        with outcomes_lock:
+            outcomes.append("OK" if res.success else res.error)
+
+    threads = [threading.Thread(target=_race) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert confirm.executions == 1, "a single approval must authorize exactly one execution"
+    assert outcomes.count("OK") == 1
+    assert outcomes.count("APPROVAL_CONSUMED") == workers - 1
+
+
+def test_mutating_original_arguments_does_not_change_approved_action(registry):
+    confirm = _CountingTool("confirm_tool", PermissionLevel.CONFIRM, _TARGET_SCHEMA)
+    registry.register(confirm)
+    executor = SafeToolExecutor(registry=registry)
+
+    source = {"target": "x"}
+    approval = PendingApproval(tool_name="confirm_tool", arguments=source)
+    source["target"] = "evil"
+
+    executor.execute_approved(approval)
+
+    assert confirm.seen_args == [{"target": "x"}], "post-display mutation must not affect the bound action"
+
+
+def test_mutating_nested_arguments_does_not_change_approved_action(registry):
+    confirm = _CountingTool("confirm_tool", PermissionLevel.CONFIRM, _NESTED_SCHEMA)
+    registry.register(confirm)
+    executor = SafeToolExecutor(registry=registry)
+
+    source = {"options": {"level": 1}}
+    approval = PendingApproval(tool_name="confirm_tool", arguments=source)
+    source["options"]["level"] = 999
+
+    executor.execute_approved(approval)
+
+    assert confirm.seen_args == [{"options": {"level": 1}}], "nested mutation must not reach the bound action"
+
+
+def test_returned_arguments_are_defensive_copies(registry):
+    confirm = _CountingTool("confirm_tool", PermissionLevel.CONFIRM, _NESTED_SCHEMA)
+    registry.register(confirm)
+    executor = SafeToolExecutor(registry=registry)
+
+    approval = PendingApproval(tool_name="confirm_tool", arguments={"options": {"level": 1}})
+
+    leaked = approval.arguments
+    leaked["options"]["level"] = 42
+    bound_name, bound_args = approval.bound_action()
+    bound_args["options"]["level"] = 42
+
+    executor.execute_approved(approval)
+
+    assert approval.tool_name == "confirm_tool"
+    assert confirm.seen_args == [{"options": {"level": 1}}], "copies handed out must not alter the bound action"
+
+
+def test_approval_is_immutable_after_creation(registry):
+    approval = PendingApproval(tool_name="confirm_tool", arguments={"target": "x"})
+
+    with pytest.raises(AttributeError):
+        approval.tool_name = "other_tool"  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        approval.arguments = {}  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        approval.consumed = True  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        approval._consumed = True  # type: ignore[misc]
+
+    assert approval.tool_name == "confirm_tool"
+    assert approval.arguments == {"target": "x"}
+    assert approval.consumed is False
+
+
+def test_mismatch_does_not_consume_the_approval(registry):
+    confirm = _CountingTool("confirm_tool", PermissionLevel.CONFIRM, _TARGET_SCHEMA)
+    registry.register(confirm)
+    executor = SafeToolExecutor(registry=registry)
+
+    approval = PendingApproval(tool_name="confirm_tool", arguments={"target": "x"})
+
+    # A request the token does not authorize must be refused without spending it.
+    mismatch, _sm = executor.execute_tool("confirm_tool", {"target": "y"}, approval=approval)
+    assert mismatch.error == "APPROVAL_MISMATCH"
+    assert approval.consumed is False
+
+    # The same token still authorizes its own, matching action exactly once.
+    ok, _sm = executor.execute_approved(approval)
+    assert ok.success is True
+    assert confirm.executions == 1
 
 
 # --------------------------------------------------------------------------
@@ -362,3 +486,38 @@ def test_tier2_approval_does_not_repeat_completed_steps(registry):
     replay = router.execute_approved(result.pending_approval)
     assert replay.error == "APPROVAL_CONSUMED"
     assert confirm_tool.executions == 1
+
+
+def test_displayed_confirmation_action_matches_bound_action(registry):
+    count_tool = _CountingTool("count_tool", PermissionLevel.SAFE)
+    confirm_tool = _CountingTool("confirm_tool", PermissionLevel.CONFIRM, _TARGET_SCHEMA)
+    registry.register(count_tool)
+    registry.register(confirm_tool)
+
+    executor = SafeToolExecutor(registry=registry)
+    gemini = _FakeGeminiClient(executor)
+
+    router = IntentRouter(
+        settings=Settings(enable_gemini=True, gemini_api_key="test-key"),
+        registry=registry,
+        executor=executor,
+        needle_client=_FakeNeedleClient(),
+        gemini_client=gemini,
+    )
+
+    result = router.route_and_execute("tell me a fun fact about the ocean")
+
+    assert result.requires_confirmation is True
+    assert result.pending_approval is not None
+    # What the dialog displays is exactly what the token binds.
+    assert result.tool_name == result.pending_approval.tool_name == "confirm_tool"
+    assert result.raw_arguments == result.pending_approval.arguments == {"target": "x"}
+
+    # Tampering with the displayed copies cannot reach the bound action.
+    result.raw_arguments["target"] = "evil"
+    result.pending_approval.arguments["target"] = "evil"
+
+    approved = router.execute_approved(result.pending_approval)
+
+    assert approved.success is True
+    assert confirm_tool.seen_args == [{"target": "x"}]

@@ -285,14 +285,17 @@ class IntentRouter:
         if validated_args is None:
             validated_args = arguments
 
+        # Build the token first, then display its bound action, so the action the
+        # user sees is exactly the action the token authorizes on approval.
+        approval = PendingApproval(tool_name=tool_name, arguments=validated_args)
         return RouteResult(
             tier_used=tier,
             response_text=message,
             requires_confirmation=True,
-            tool_name=tool_name,
-            raw_arguments=arguments,
+            tool_name=approval.tool_name,
+            raw_arguments=approval.arguments,
             execution_trace=trace,
-            pending_approval=PendingApproval(tool_name=tool_name, arguments=validated_args),
+            pending_approval=approval,
             completed_results=completed or [],
         )
 

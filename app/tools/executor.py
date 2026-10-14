@@ -4,7 +4,8 @@ Orchestrates the 7-stage state machine, argument validation, and permission chec
 before executing any local desktop tool.
 """
 
-from dataclasses import dataclass, field
+import copy
+import threading
 from typing import Any, Dict, Optional, Tuple
 from uuid import uuid4
 
@@ -16,28 +17,75 @@ from app.tools.base import ToolResult
 from app.tools.registry import ToolRegistry, get_tool_registry
 
 
-@dataclass
 class PendingApproval:
     """
     Single-use token binding a user's confirmation to one exact action.
 
-    A pending approval records the tool and the validated arguments that were
-    shown to the user.  It authorizes nothing else: the executor only accepts it
-    when it names the same tool with the same validated arguments, and it is
-    consumed on first use, so it can never be replayed for a second execution.
+    A pending approval keeps a private, deep-copied snapshot of the tool name and
+    the validated arguments that were shown to the user.  The snapshot is frozen
+    at construction and only ever copied out, so the action that executes is
+    always the action that was displayed and cannot be changed after the fact.
+    Spending the token is atomic, so even simultaneous callers can only ever
+    execute the approved action once.
     """
 
-    tool_name: str
-    arguments: Dict[str, Any] = field(default_factory=dict)
-    consumed: bool = False
+    __slots__ = ("_tool_name", "_arguments", "_lock", "_consumed")
+
+    def __init__(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None):
+        object.__setattr__(self, "_tool_name", str(tool_name))
+        object.__setattr__(
+            self,
+            "_arguments",
+            copy.deepcopy(dict(arguments)) if arguments else {},
+        )
+        object.__setattr__(self, "_lock", threading.Lock())
+        object.__setattr__(self, "_consumed", False)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("PendingApproval is immutable once created.")
+
+    @property
+    def tool_name(self) -> str:
+        """The approved tool's name."""
+        return self._tool_name
+
+    @property
+    def arguments(self) -> Dict[str, Any]:
+        """A defensive copy of the approved, validated arguments."""
+        return copy.deepcopy(self._arguments)
+
+    @property
+    def consumed(self) -> bool:
+        """Whether this approval has already been spent."""
+        with self._lock:
+            return self._consumed
+
+    def bound_action(self) -> Tuple[str, Dict[str, Any]]:
+        """
+        The immutable (tool_name, arguments) this approval authorizes.
+
+        Returns copies, so no caller can alter the approved action through the
+        values it hands back to the executor.
+        """
+        return self._tool_name, copy.deepcopy(self._arguments)
 
     def matches(self, tool_name: str, arguments: Dict[str, Any]) -> bool:
         """True when this approval authorizes exactly (tool_name, arguments)."""
-        return self.tool_name == tool_name and self.arguments == arguments
+        return self._tool_name == tool_name and self._arguments == arguments
 
-    def consume(self) -> None:
-        """Mark the approval used; a consumed approval authorizes nothing."""
-        self.consumed = True
+    def try_consume(self) -> bool:
+        """
+        Atomically spend this approval.
+
+        Returns True only for the first caller; every later caller gets False, so
+        a single approval can never authorize two executions.  The lock is held
+        only for the flag flip, never while a tool runs.
+        """
+        with self._lock:
+            if self._consumed:
+                return False
+            object.__setattr__(self, "_consumed", True)
+            return True
 
 
 class SafeToolExecutor:
@@ -118,16 +166,8 @@ class SafeToolExecutor:
                     ),
                     sm
                 )
-            if approval.consumed:
-                sm.transition_to(ExecutionState.FAILED, "Approval has already been consumed.")
-                return (
-                    ToolResult.fail(
-                        tool=tool_name,
-                        error="APPROVAL_CONSUMED",
-                        message="This confirmation was already used. Please confirm the action again."
-                    ),
-                    sm
-                )
+            # Bind to the exact approved action before spending the token, so a
+            # mismatched request can neither consume nor ride an approval.
             if not approval.matches(tool_name, val_res.cleaned_args):
                 sm.transition_to(ExecutionState.FAILED, "Approval does not authorize this action.")
                 return (
@@ -138,8 +178,18 @@ class SafeToolExecutor:
                     ),
                     sm
                 )
-            # The approval authorizes this exact action; spend it before executing.
-            approval.consume()
+            # Atomically spend the approval; exactly one of any concurrent callers
+            # proceeds, and the lock is released before the tool executes.
+            if not approval.try_consume():
+                sm.transition_to(ExecutionState.FAILED, "Approval has already been consumed.")
+                return (
+                    ToolResult.fail(
+                        tool=tool_name,
+                        error="APPROVAL_CONSUMED",
+                        message="This confirmation was already used. Please confirm the action again."
+                    ),
+                    sm
+                )
 
         # Stage 5: EXECUTING
         sm.transition_to(ExecutionState.EXECUTING, "Executing tool code...")
@@ -168,10 +218,13 @@ class SafeToolExecutor:
         This re-enters the full pipeline with the approval token: the tool must
         still be registered, the arguments are validated again, permissions are
         re-evaluated, and the approval must name precisely this action and be
-        unused.  Nothing about the original request text is re-interpreted.
+        unused.  Nothing about the original request text is re-interpreted, and
+        the request is rebuilt only from the token's frozen snapshot -- never from
+        caller-mutable fields.
         """
+        tool_name, arguments = approval.bound_action()
         return self.execute_tool(
-            tool_name=approval.tool_name,
-            raw_args=dict(approval.arguments),
+            tool_name=tool_name,
+            raw_args=arguments,
             approval=approval
         )
