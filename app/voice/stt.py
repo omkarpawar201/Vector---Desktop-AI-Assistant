@@ -14,13 +14,37 @@ application startup. Failures are logged by reason only -- the audio content,
 credentials, and sensitive device details are never logged.
 """
 
+import array
 import logging
+import sys
 import wave
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _OFFLINE_BACKENDS = ("offline", "auto")
+
+_CLIPPING_WARN_FRACTION = 0.001
+
+
+def _pcm_clipped_fraction(pcm_bytes: bytes) -> float:
+    """
+    Fraction of 16-bit samples pinned at the positive or negative rail.
+
+    The microphone is captured at a fixed Windows input level; if that level is
+    too high the device (or a Microphone Boost stage) already clips before the
+    driver. This measures that condition so it can be surfaced, without applying
+    any software gain or normalization -- clipped samples are unrecoverable.
+    """
+    count = len(pcm_bytes) // 2
+    if count <= 0:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(pcm_bytes[: count * 2])
+    if sys.byteorder == "big":
+        samples.byteswap()
+    clipped = sum(1 for s in samples if s >= 32767 or s <= -32768)
+    return clipped / count
 
 
 class _SherpaOfflineBackend:
@@ -293,6 +317,13 @@ class STTEngine:
             if offline is not None:
                 try:
                     pcm = audio.get_raw_data(convert_rate=self.sample_rate, convert_width=2)
+                    clipped = _pcm_clipped_fraction(pcm)
+                    if clipped > _CLIPPING_WARN_FRACTION:
+                        logger.warning(
+                            "STT: microphone input is clipping (%.1f%% of samples at full "
+                            "scale); lower the Windows input level or disable Microphone Boost",
+                            clipped * 100.0,
+                        )
                     text = offline.transcribe_pcm(pcm, self.sample_rate)
                     if text and text.strip():
                         return text.strip()

@@ -17,6 +17,8 @@ from app.config.settings import Settings, get_settings
 from app.core.router import IntentRouter, RouteResult
 from app.memory.history import HistoryManager
 from app.tools.applications.launcher import CloseAppTool, GetRunningAppsTool, LaunchAppTool
+from app.tools.base import ToolResult
+from app.tools.executor import PendingApproval
 from app.tools.files.manager import GetFileInfoTool, OpenFileTool, OpenFolderTool, SearchFilesTool
 from app.tools.media.controller import MediaNextTool, MediaPauseTool, MediaPlayTool, MediaPreviousTool
 from app.tools.power.power import LockPcTool, RestartPcTool, ShutdownPcTool, SleepPcTool
@@ -57,21 +59,35 @@ class WorkerSignals(QObject):
 class RouteWorker(QRunnable):
     """Background worker executing IntentRouter pipeline off the Qt main UI thread."""
 
-    def __init__(self, router: IntentRouter, user_query: str, confirmed: bool = False):
+    def __init__(self, router: IntentRouter, user_query: str):
         super().__init__()
         self.router = router
         self.user_query = user_query
-        self.confirmed = confirmed
         self.signals = WorkerSignals()
 
     @Slot()
     def run(self) -> None:
         try:
-            route_res = self.router.route_and_execute(
-                user_query=self.user_query,
-                confirmed_by_user=self.confirmed
-            )
+            route_res = self.router.route_and_execute(user_query=self.user_query)
             self.signals.result.emit(route_res)
+        except Exception as e:
+            self.signals.error.emit(str(e))
+
+
+class ApprovalWorker(QRunnable):
+    """Background worker executing one user-approved action off the UI thread."""
+
+    def __init__(self, router: IntentRouter, approval: PendingApproval):
+        super().__init__()
+        self.router = router
+        self.approval = approval
+        self.signals = WorkerSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            tool_result = self.router.execute_approved(self.approval)
+            self.signals.result.emit(tool_result)
         except Exception as e:
             self.signals.error.emit(str(e))
 
@@ -223,17 +239,43 @@ class MainWindow(QMainWindow):
         else:
             self.chat_view.add_assistant_message("No speech detected. Please speak clearly into your microphone.")
 
-    def _handle_user_command(self, query: str, confirmed: bool = False) -> None:
-        if not confirmed:
-            self.chat_view.add_user_message(query)
-            self.history.add_message(self.current_conv_id, "user", query)
+    def _handle_user_command(self, query: str) -> None:
+        self.chat_view.add_user_message(query)
+        self.history.add_message(self.current_conv_id, "user", query)
 
-        worker = RouteWorker(self.router, query, confirmed=confirmed)
-        worker.signals.result.connect(lambda res: self._on_route_finished(res, query))
+        worker = RouteWorker(self.router, query)
+        worker.signals.result.connect(self._on_route_finished)
         worker.signals.error.connect(lambda err: self.chat_view.add_assistant_message(f"Error: {err}"))
         self.thread_pool.start(worker)
 
-    def _on_route_finished(self, route_res: RouteResult, original_query: str) -> None:
+    def _execute_approved(self, approval: Optional[PendingApproval]) -> None:
+        """Run exactly the action the user approved (single-use token)."""
+        if approval is None:
+            self.chat_view.add_assistant_message(
+                "This action could not be confirmed safely. Please try again."
+            )
+            return
+
+        worker = ApprovalWorker(self.router, approval)
+        worker.signals.result.connect(self._on_approved_finished)
+        worker.signals.error.connect(lambda err: self.chat_view.add_assistant_message(f"Error: {err}"))
+        self.thread_pool.start(worker)
+
+    def _on_approved_finished(self, tool_result: ToolResult) -> None:
+        self._present_result(tool_result)
+
+    def _present_result(self, tr: Optional[ToolResult]) -> None:
+        """Surface one executed tool result as a message plus an action card."""
+        if tr is None:
+            return
+        if tr.message:
+            self.chat_view.add_assistant_message(tr.message)
+            self.history.add_message(self.current_conv_id, "assistant", tr.message)
+            if self.settings.enable_voice:
+                self.tts.speak(tr.message)
+        self.chat_view.add_action_card(tool_name=tr.tool, message=tr.message, success=tr.success)
+
+    def _on_route_finished(self, route_res: RouteResult) -> None:
         # Optionally surface the exactly-resolved tier (and its confidence) to the
         # terminal for every command — no UI clutter, just the routing fact.
         if self.show_tier_in_terminal:
@@ -245,8 +287,14 @@ class MainWindow(QMainWindow):
                 f"conf={route_res.confidence if route_res.confidence else '-'}",
                 flush=True,
             )
+
+        # Report steps that already ran (e.g. Tier 2 safe calls before a gate).
+        # They already happened and are never repeated.
+        for completed in route_res.completed_results:
+            self._present_result(completed)
+
         if route_res.requires_confirmation:
-            # Show Security Confirmation Dialog
+            # Show Security Confirmation Dialog bound to the displayed action
             dlg = ConfirmationDialog(
                 tool_name=route_res.tool_name,
                 message=route_res.response_text,
@@ -254,22 +302,18 @@ class MainWindow(QMainWindow):
                 parent=self
             )
             if dlg.exec():
-                # Re-submit with confirmed=True
-                self._handle_user_command(original_query, confirmed=True)
+                # Execute exactly the approved action; never re-resolve the query.
+                self._execute_approved(route_res.pending_approval)
             else:
                 self.chat_view.add_assistant_message("Action cancelled by user.")
             return
 
-        # Add assistant response
-        if route_res.response_text:
+        if route_res.tool_result:
+            self._present_result(route_res.tool_result)
+        elif route_res.response_text:
             self.chat_view.add_assistant_message(route_res.response_text)
             self.history.add_message(self.current_conv_id, "assistant", route_res.response_text)
 
             # Speak output aloud via Windows TTS if enabled
             if self.settings.enable_voice:
                 self.tts.speak(route_res.response_text)
-
-        # Add visual Action Card if tool executed
-        if route_res.tool_result:
-            tr = route_res.tool_result
-            self.chat_view.add_action_card(tool_name=tr.tool, message=tr.message, success=tr.success)

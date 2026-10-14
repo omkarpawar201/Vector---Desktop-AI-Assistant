@@ -199,7 +199,7 @@ def test_close_app_matching_nothing_reports_not_running(executor):
 # --------------------------------------------------------------------------
 
 def test_dangerous_tool_requires_confirmation_and_never_executes(executor):
-    res, sm = executor.execute_tool("shutdown_pc", {}, confirmed_by_user=False)
+    res, sm = executor.execute_tool("shutdown_pc", {})
 
     assert res.success is False
     assert res.error == "CONFIRMATION_REQUIRED"
@@ -207,7 +207,7 @@ def test_dangerous_tool_requires_confirmation_and_never_executes(executor):
 
 
 def test_confirm_tool_requires_confirmation(executor):
-    res, sm = executor.execute_tool("sleep_pc", {}, confirmed_by_user=False)
+    res, sm = executor.execute_tool("sleep_pc", {})
 
     assert res.success is False
     assert res.error == "CONFIRMATION_REQUIRED"

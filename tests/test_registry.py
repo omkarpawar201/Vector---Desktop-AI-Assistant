@@ -7,7 +7,7 @@ from app.config.constants import ExecutionState, PermissionLevel
 from app.core.state_machine import ExecutionStateMachine
 from app.security.permissions import PermissionEngine
 from app.tools.base import BaseTool, ToolResult
-from app.tools.executor import SafeToolExecutor
+from app.tools.executor import PendingApproval, SafeToolExecutor
 from app.tools.registry import CapabilityRegistry, ToolRegistry
 
 
@@ -95,12 +95,14 @@ def test_safe_tool_executor():
     assert sm_val.current_state == ExecutionState.FAILED
 
     # 3. Confirmation required for DANGEROUS tool
-    res_dang, sm_dang = executor.execute_tool("dummy_dangerous", {}, confirmed_by_user=False)
+    res_dang, sm_dang = executor.execute_tool("dummy_dangerous", {})
     assert res_dang.success is False
     assert res_dang.error == "CONFIRMATION_REQUIRED"
     assert sm_dang.current_state == ExecutionState.CONFIRMATION
 
-    # 4. Confirmed execution for DANGEROUS tool
-    res_conf, sm_conf = executor.execute_tool("dummy_dangerous", {}, confirmed_by_user=True)
+    # 4. Confirmed execution for DANGEROUS tool (bound, single-use approval)
+    approval = PendingApproval(tool_name="dummy_dangerous", arguments={})
+    res_conf, sm_conf = executor.execute_tool("dummy_dangerous", {}, approval=approval)
     assert res_conf.success is True
     assert sm_conf.current_state == ExecutionState.SUCCESS
+    assert approval.consumed is True

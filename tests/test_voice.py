@@ -22,7 +22,7 @@ from app.config.settings import Settings
 from app.core.router import IntentRouter
 from app.tools.registry import ToolRegistry
 from app.voice.listener import VoiceListener
-from app.voice.stt import STTEngine, _SherpaOfflineBackend
+from app.voice.stt import STTEngine, _SherpaOfflineBackend, _pcm_clipped_fraction
 from app.voice.tts import TTSEngine
 from app.voice.vad import VADEngine
 
@@ -395,6 +395,49 @@ def test_offline_mic_success_uses_offline_only(monkeypatch):
     assert rec.google_calls == 0
     assert fake.pcm_calls == [(audio.raw, engine.sample_rate)]
     assert audio.conversions == [(engine.sample_rate, 2)]
+
+
+def test_pcm_clipped_fraction_counts_full_scale_samples():
+    assert _pcm_clipped_fraction(b"") == 0.0
+
+    clean = struct.pack("<4h", 0, 1000, -1000, 20000)
+    assert _pcm_clipped_fraction(clean) == 0.0
+
+    hot = struct.pack("<4h", 32767, -32768, 100, -100)
+    assert _pcm_clipped_fraction(hot) == 0.5
+
+
+def test_offline_mic_warns_but_transcribes_when_input_clips(monkeypatch, caplog):
+    """A hot capture must be flagged at the source, never silently boosted."""
+    hot = struct.pack("<200h", *([32767, -32768] * 100))
+    audio = _FakeAudioData(raw=hot)
+    rec = _FakeRecognizer(audio=audio)
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    fake = _FakeOfflineBackend(text="open chrome")
+
+    engine = STTEngine(backend="offline")
+    _inject_offline(engine, fake)
+
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        assert engine.listen_and_transcribe_mic() == "open chrome"
+
+    assert rec.google_calls == 0
+    assert any("clipping" in r.message for r in caplog.records)
+
+
+def test_offline_mic_no_clipping_warning_for_normal_signal(monkeypatch, caplog):
+    audio = _FakeAudioData(raw=struct.pack("<200h", *([3000, -3000] * 100)))
+    rec = _FakeRecognizer(audio=audio)
+    monkeypatch.setitem(sys.modules, "speech_recognition", _fake_sr_module(rec))
+    fake = _FakeOfflineBackend(text="open chrome")
+
+    engine = STTEngine(backend="offline")
+    _inject_offline(engine, fake)
+
+    with caplog.at_level("WARNING", logger="app.voice.stt"):
+        assert engine.listen_and_transcribe_mic() == "open chrome"
+
+    assert not any("clipping" in r.message for r in caplog.records)
 
 
 def test_offline_failure_strict_returns_empty_without_online(monkeypatch, caplog):

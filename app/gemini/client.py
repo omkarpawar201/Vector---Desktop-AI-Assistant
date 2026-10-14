@@ -42,12 +42,16 @@ class GeminiClient:
 
     def execute_reasoning_loop(
         self,
-        user_query: str,
-        confirmed_by_user: bool = False
+        user_query: str
     ) -> Dict[str, Any]:
         """
         Executes a multi-tool reasoning loop with Gemini API.
         Enforces MAX_TOOL_CALLS = 10 limit to prevent infinite loops or lockups.
+
+        Confirmation is handled fail-closed: as soon as a tool call needs user
+        confirmation the loop stops and returns the gated call to the caller.
+        The loop is never resumed afterwards, so the safe steps that already ran
+        are not repeated -- only the gated call is executed once approved.
         """
         if not self.settings.is_gemini_available:
             return {
@@ -97,7 +101,6 @@ class GeminiClient:
                 res, sm = self.executor.execute_tool(
                     tool_name=tool_name,
                     raw_args=raw_args,
-                    confirmed_by_user=confirmed_by_user
                 )
 
                 tool_calls_executed.append({
@@ -106,16 +109,22 @@ class GeminiClient:
                     "arguments": raw_args,
                     "success": res.success,
                     "message": res.message,
-                    "data": res.data
+                    "data": res.data,
+                    "error": res.error
                 })
 
                 if not res.success and res.error == "CONFIRMATION_REQUIRED":
-                    # Require user confirmation modal for dangerous/confirm tools
+                    # Fail closed: stop the loop and hand the gated call back
+                    # for a bound, single-use user approval.  The loop is not
+                    # resumed, so already-executed steps never run twice.
                     return {
                         "success": False,
                         "requires_confirmation": True,
                         "tool_name": tool_name,
                         "arguments": raw_args,
+                        "validated_arguments": (res.data or {}).get(
+                            "validated_arguments", raw_args
+                        ),
                         "response": res.message,
                         "tool_calls": tool_calls_executed
                     }

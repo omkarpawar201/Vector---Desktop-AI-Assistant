@@ -13,7 +13,7 @@ from app.core.matcher import Tier0Matcher
 from app.gemini.client import GeminiClient
 from app.needle.client import NeedleClient
 from app.tools.base import ToolResult
-from app.tools.executor import SafeToolExecutor
+from app.tools.executor import PendingApproval, SafeToolExecutor
 from app.tools.registry import ToolRegistry, get_tool_registry
 
 
@@ -29,6 +29,13 @@ class RouteResult:
     tool_name: str = ""
     raw_arguments: Dict[str, Any] = field(default_factory=dict)
     execution_trace: List[Dict[str, Any]] = field(default_factory=list)
+    #: The exact action a user must approve; only set when confirmation is
+    #: required.  Approving it executes this action verbatim -- never a
+    #: re-interpretation of the original query.
+    pending_approval: Optional[PendingApproval] = None
+    #: Tool calls that already ran and must not be repeated, e.g. the safe steps
+    #: a Tier 2 loop completed before it reached a confirmation-gated tool.
+    completed_results: List[ToolResult] = field(default_factory=list)
 
 
 class IntentRouter:
@@ -50,7 +57,7 @@ class IntentRouter:
         self.needle_client = needle_client or NeedleClient(settings=self.settings, registry=self.registry)
         self.gemini_client = gemini_client or GeminiClient(settings=self.settings, registry=self.registry, executor=self.executor)
 
-    def route_and_execute(self, user_query: str, confirmed_by_user: bool = False) -> RouteResult:
+    def route_and_execute(self, user_query: str) -> RouteResult:
         """
         Processes user query through Tier 0 -> Tier 1 -> Tier 2 pipeline.
         Prints real-time terminal routing traces.
@@ -74,18 +81,12 @@ class IntentRouter:
             res, sm = self.executor.execute_tool(
                 tool_name=tier0_match.tool_name,
                 raw_args=tier0_match.arguments,
-                confirmed_by_user=confirmed_by_user
             )
 
             if not res.success and res.error == "CONFIRMATION_REQUIRED":
-                return RouteResult(
-                    tier_used=IntentTier.TIER_0_DIRECT,
-                    tool_result=res,
-                    response_text=res.message,
-                    requires_confirmation=True,
-                    tool_name=tier0_match.tool_name,
-                    raw_arguments=tier0_match.arguments,
-                    execution_trace=trace
+                return self._confirmation(
+                    IntentTier.TIER_0_DIRECT, tier0_match.tool_name,
+                    tier0_match.arguments, res, trace
                 )
 
             return RouteResult(
@@ -116,18 +117,12 @@ class IntentRouter:
             res, sm = self.executor.execute_tool(
                 tool_name=onnx_res.tool_name,
                 raw_args=onnx_res.arguments,
-                confirmed_by_user=confirmed_by_user
             )
 
             if not res.success and res.error == "CONFIRMATION_REQUIRED":
-                return RouteResult(
-                    tier_used=IntentTier.TIER_0_5_NEEDLE,
-                    tool_result=res,
-                    response_text=res.message,
-                    requires_confirmation=True,
-                    tool_name=onnx_res.tool_name,
-                    raw_arguments=onnx_res.arguments,
-                    execution_trace=trace
+                return self._confirmation(
+                    IntentTier.TIER_0_5_NEEDLE, onnx_res.tool_name,
+                    onnx_res.arguments, res, trace
                 )
 
             return RouteResult(
@@ -189,18 +184,12 @@ class IntentRouter:
                 res, sm = self.executor.execute_tool(
                     tool_name=needle_res.tool_name,
                     raw_args=needle_res.arguments,
-                    confirmed_by_user=confirmed_by_user
                 )
 
                 if not res.success and res.error == "CONFIRMATION_REQUIRED":
-                    return RouteResult(
-                        tier_used=IntentTier.TIER_1_NEEDLE,
-                        tool_result=res,
-                        response_text=res.message,
-                        requires_confirmation=True,
-                        tool_name=needle_res.tool_name,
-                        raw_arguments=needle_res.arguments,
-                        execution_trace=trace
+                    return self._confirmation(
+                        IntentTier.TIER_1_NEEDLE, needle_res.tool_name,
+                        needle_res.arguments, res, trace
                     )
 
                 return RouteResult(
@@ -226,25 +215,30 @@ class IntentRouter:
         if self.settings.enable_gemini and self.settings.is_gemini_available:
             print(f"\n[TIER 2: GEMINI API] -> \"{query}\" (Escalated for cloud reasoning)")
             trace.append({"step": "Tier 2 Gemini", "status": "Escalated to Gemini"})
-            gemini_output = self.gemini_client.execute_reasoning_loop(
-                user_query=query,
-                confirmed_by_user=confirmed_by_user
-            )
+            gemini_output = self.gemini_client.execute_reasoning_loop(user_query=query)
+
+            completed = self._completed_from_calls(gemini_output.get("tool_calls"))
 
             if gemini_output.get("requires_confirmation"):
-                return RouteResult(
-                    tier_used=IntentTier.TIER_2_GEMINI,
+                # Steps the loop already ran are carried forward so the UI can
+                # report them; only the gated call is left to approve.  The loop
+                # itself is never replayed, so no completed step runs twice.
+                return self._confirmation(
+                    IntentTier.TIER_2_GEMINI,
+                    gemini_output.get("tool_name", ""),
+                    gemini_output.get("arguments", {}),
+                    gemini_output,
+                    trace,
+                    validated=gemini_output.get("validated_arguments"),
+                    completed=completed,
                     response_text=gemini_output.get("response", ""),
-                    requires_confirmation=True,
-                    tool_name=gemini_output.get("tool_name", ""),
-                    raw_arguments=gemini_output.get("arguments", {}),
-                    execution_trace=trace
                 )
 
             return RouteResult(
                 tier_used=IntentTier.TIER_2_GEMINI,
                 response_text=gemini_output.get("response", ""),
-                execution_trace=trace
+                execution_trace=trace,
+                completed_results=completed
             )
 
         # Offline / Fallback when Gemini is disabled or unavailable
@@ -254,3 +248,86 @@ class IntentRouter:
             response_text="Gemini unavailable. I can still handle local desktop commands (volume, apps, stats, power, media).",
             execution_trace=trace
         )
+
+    # =====================================================================
+    # Confirmation handoff
+    # =====================================================================
+
+    def _confirmation(
+        self,
+        tier: IntentTier,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        execution_result: Any,
+        trace: List[Dict[str, Any]],
+        validated: Optional[Dict[str, Any]] = None,
+        completed: Optional[List[ToolResult]] = None,
+        response_text: str = "",
+    ) -> RouteResult:
+        """
+        Builds a confirmation RouteResult bound to one exact action.
+
+        ``execution_result`` may be a ToolResult (per-tier path) or the Tier 2
+        loop's output dict.  The validated arguments -- the ones the executor
+        actually compared and will re-validate -- are carried into the pending
+        approval so approving replay is guaranteed to match.
+        """
+        if isinstance(execution_result, ToolResult):
+            message = execution_result.message
+            validated_args = (execution_result.data or {}).get(
+                "validated_arguments", arguments
+            )
+        else:
+            message = response_text or execution_result.get("response", "")
+            validated_args = (
+                validated if validated is not None else arguments
+            )
+        if validated_args is None:
+            validated_args = arguments
+
+        return RouteResult(
+            tier_used=tier,
+            response_text=message,
+            requires_confirmation=True,
+            tool_name=tool_name,
+            raw_arguments=arguments,
+            execution_trace=trace,
+            pending_approval=PendingApproval(tool_name=tool_name, arguments=validated_args),
+            completed_results=completed or [],
+        )
+
+    @staticmethod
+    def _completed_from_calls(
+        calls: Optional[List[Dict[str, Any]]]
+    ) -> List[ToolResult]:
+        """Reconstruct executed ToolResults from a Tier 2 loop's call log.
+
+        The confirmation-gated call is excluded: it never ran, so it must not be
+        reported as a completed side effect.
+        """
+        results: List[ToolResult] = []
+        for call in calls or []:
+            if call.get("error") == "CONFIRMATION_REQUIRED":
+                continue
+            results.append(
+                ToolResult(
+                    success=bool(call.get("success")),
+                    tool=call.get("tool", ""),
+                    data=call.get("data"),
+                    message=call.get("message", ""),
+                    error=call.get("error"),
+                )
+            )
+        return results
+
+    def execute_approved(self, approval: PendingApproval) -> ToolResult:
+        """
+        Executes the exact action the user approved.
+
+        No tier runs again and the original query is not re-resolved: only the
+        (tool, validated arguments) the user saw are executed, through the full
+        executor pipeline.  The approval is single-use, so a second call with the
+        same token is refused by the executor.
+        """
+        res, _sm = self.executor.execute_approved(approval)
+        return res
