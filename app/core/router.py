@@ -9,8 +9,10 @@ from typing import Any, Dict, List, Optional
 
 from app.config.constants import IntentTier
 from app.config.settings import Settings, get_settings
+from app.core.context import ContextBuilder
 from app.core.matcher import Tier0Matcher
 from app.gemini.client import GeminiClient
+from app.memory.history import HistoryManager
 from app.needle.client import NeedleClient
 from app.tools.base import ToolResult
 from app.tools.executor import PendingApproval, SafeToolExecutor
@@ -49,18 +51,32 @@ class IntentRouter:
         registry: Optional[ToolRegistry] = None,
         executor: Optional[SafeToolExecutor] = None,
         needle_client: Optional[NeedleClient] = None,
-        gemini_client: Optional[GeminiClient] = None
+        gemini_client: Optional[GeminiClient] = None,
+        history_manager: Optional[HistoryManager] = None
     ):
         self.settings = settings or get_settings()
         self.registry = registry or get_tool_registry()
         self.executor = executor or SafeToolExecutor(registry=self.registry)
         self.needle_client = needle_client or NeedleClient(settings=self.settings, registry=self.registry)
         self.gemini_client = gemini_client or GeminiClient(settings=self.settings, registry=self.registry, executor=self.executor)
+        # Optional: only consulted for conversational context on Tier 2.  When
+        # absent (or when no conversation_id is supplied) context is empty and
+        # the pipeline behaves exactly as before.
+        self.history_manager = history_manager
 
-    def route_and_execute(self, user_query: str) -> RouteResult:
+    def route_and_execute(
+        self,
+        user_query: str,
+        conversation_id: Optional[str] = None
+    ) -> RouteResult:
         """
         Processes user query through Tier 0 -> Tier 1 -> Tier 2 pipeline.
         Prints real-time terminal routing traces.
+
+        ``conversation_id`` optionally names the active conversation so Tier 2
+        can receive its recent turns as context.  Callers that omit it (or when
+        no history manager is configured) get empty context and the previous
+        behaviour, unchanged.  Tier 0 / Tier 1 never read history.
         """
         if not user_query or not user_query.strip():
             return RouteResult(
@@ -215,7 +231,17 @@ class IntentRouter:
         if self.settings.enable_gemini and self.settings.is_gemini_available:
             print(f"\n[TIER 2: GEMINI API] -> \"{query}\" (Escalated for cloud reasoning)")
             trace.append({"step": "Tier 2 Gemini", "status": "Escalated to Gemini"})
-            gemini_output = self.gemini_client.execute_reasoning_loop(user_query=query)
+
+            # Context is assembled only on the Tier 2 path, from the active
+            # conversation alone.  An empty window keeps the legacy call shape
+            # so callers/clients that predate conversation context still work.
+            history = self._conversation_context(conversation_id, query)
+            if history:
+                gemini_output = self.gemini_client.execute_reasoning_loop(
+                    user_query=query, history=history
+                )
+            else:
+                gemini_output = self.gemini_client.execute_reasoning_loop(user_query=query)
 
             completed = self._completed_from_calls(gemini_output.get("tool_calls"))
 
@@ -248,6 +274,29 @@ class IntentRouter:
             response_text="Gemini unavailable. I can still handle local desktop commands (volume, apps, stats, power, media).",
             execution_trace=trace
         )
+
+    def _conversation_context(
+        self,
+        conversation_id: Optional[str],
+        query: str
+    ) -> List[Dict[str, str]]:
+        """
+        Recent sanitized turns for the active conversation, or ``[]``.
+
+        Fail-safe by design: a missing conversation, empty history, malformed
+        row, or storage error all degrade to empty context so the command is
+        still routable.
+        """
+        if not conversation_id or self.history_manager is None:
+            return []
+        try:
+            return ContextBuilder.build_conversation_context(
+                conversation_id=conversation_id,
+                history_manager=self.history_manager,
+                current_query=query,
+            )
+        except Exception:
+            return []
 
     # =====================================================================
     # Confirmation handoff

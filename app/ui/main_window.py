@@ -59,16 +59,25 @@ class WorkerSignals(QObject):
 class RouteWorker(QRunnable):
     """Background worker executing IntentRouter pipeline off the Qt main UI thread."""
 
-    def __init__(self, router: IntentRouter, user_query: str):
+    def __init__(
+        self,
+        router: IntentRouter,
+        user_query: str,
+        conversation_id: Optional[str] = None
+    ):
         super().__init__()
         self.router = router
         self.user_query = user_query
+        self.conversation_id = conversation_id
         self.signals = WorkerSignals()
 
     @Slot()
     def run(self) -> None:
         try:
-            route_res = self.router.route_and_execute(user_query=self.user_query)
+            route_res = self.router.route_and_execute(
+                user_query=self.user_query,
+                conversation_id=self.conversation_id,
+            )
             self.signals.result.emit(route_res)
         except Exception as e:
             self.signals.error.emit(str(e))
@@ -125,9 +134,16 @@ class MainWindow(QMainWindow):
         self.registry = get_tool_registry()
         self._register_default_tools()
 
-        self.router = IntentRouter(settings=self.settings, registry=self.registry)
+        # The active conversation must exist before the router so Tier 2 can be
+        # handed its recent turns as follow-up context.
         self.history = HistoryManager()
         self.current_conv_id = self.history.create_conversation("Vector Session")
+
+        self.router = IntentRouter(
+            settings=self.settings,
+            registry=self.registry,
+            history_manager=self.history,
+        )
 
         self.tts = TTSEngine()
         self.voice_listener = VoiceListener()
@@ -243,7 +259,7 @@ class MainWindow(QMainWindow):
         self.chat_view.add_user_message(query)
         self.history.add_message(self.current_conv_id, "user", query)
 
-        worker = RouteWorker(self.router, query)
+        worker = RouteWorker(self.router, query, self.current_conv_id)
         worker.signals.result.connect(self._on_route_finished)
         worker.signals.error.connect(lambda err: self.chat_view.add_assistant_message(f"Error: {err}"))
         self.thread_pool.start(worker)

@@ -89,14 +89,37 @@ class HistoryManager:
 
             return [dict(row) for row in rows]
 
-    def get_recent_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_recent_history(
+        self,
+        conversation_id: Optional[str] = None,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
         """
-        Retrieves recent messages across all conversations.
+        Retrieves recent messages.
+
+        With ``conversation_id`` the result is scoped to that conversation and
+        returned oldest-first (the order a dialogue context must be replayed
+        in).  Without it the legacy behaviour is preserved: the newest ``limit``
+        rows across every conversation, newest-first.
+
+        ``limit`` always counts individual message rows, not user/assistant
+        turns; callers that need complete turns must group the rows themselves.
         """
         with self.db.get_connection() as conn:
+            if conversation_id is None:
+                rows = conn.execute(
+                    "SELECT id, conversation_id, role, content, timestamp FROM messages ORDER BY timestamp DESC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+
+                return [dict(row) for row in rows]
+
+            # Take the newest rows, then flip to chronological order so the
+            # oldest of the retained window is presented first.
             rows = conn.execute(
-                "SELECT id, conversation_id, role, content, timestamp FROM messages ORDER BY timestamp DESC LIMIT ?",
-                (limit,)
+                "SELECT id, conversation_id, role, content, timestamp FROM messages "
+                "WHERE conversation_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?",
+                (conversation_id, limit)
             ).fetchall()
 
-            return [dict(row) for row in rows]
+            return [dict(row) for row in reversed(rows)]
