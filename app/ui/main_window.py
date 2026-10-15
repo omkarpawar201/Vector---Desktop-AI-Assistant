@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from app.config.settings import Settings, get_settings
 from app.core.router import IntentRouter, RouteResult
 from app.memory.history import HistoryManager
+from app.memory.journal import ExecutionJournal
 from app.tools.applications.launcher import CloseAppTool, GetRunningAppsTool, LaunchAppTool
 from app.tools.base import ToolResult
 from app.tools.executor import PendingApproval
@@ -86,16 +87,17 @@ class RouteWorker(QRunnable):
 class ApprovalWorker(QRunnable):
     """Background worker executing one user-approved action off the UI thread."""
 
-    def __init__(self, router: IntentRouter, approval: PendingApproval):
+    def __init__(self, router: IntentRouter, approval: PendingApproval, conversation_id: Optional[str] = None):
         super().__init__()
         self.router = router
         self.approval = approval
+        self.conversation_id = conversation_id
         self.signals = WorkerSignals()
 
     @Slot()
     def run(self) -> None:
         try:
-            tool_result = self.router.execute_approved(self.approval)
+            tool_result = self.router.execute_approved(self.approval, conversation_id=self.conversation_id)
             self.signals.result.emit(tool_result)
         except Exception as e:
             self.signals.error.emit(str(e))
@@ -272,7 +274,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        worker = ApprovalWorker(self.router, approval)
+        worker = ApprovalWorker(self.router, approval, self.current_conv_id)
         worker.signals.result.connect(self._on_approved_finished)
         worker.signals.error.connect(lambda err: self.chat_view.add_assistant_message(f"Error: {err}"))
         self.thread_pool.start(worker)
@@ -326,6 +328,7 @@ class MainWindow(QMainWindow):
                 self._execute_approved(route_res.pending_approval)
             else:
                 self.chat_view.add_assistant_message("Action cancelled by user.")
+                self._journal_cancellation(route_res)
             return
 
         if route_res.tool_result:
@@ -337,3 +340,22 @@ class MainWindow(QMainWindow):
             # Speak output aloud via Windows TTS if enabled
             if self.settings.enable_voice:
                 self.tts.speak(route_res.response_text)
+
+    def _journal_cancellation(self, route_res: Optional[RouteResult]) -> None:
+        """
+        Record a cancelled confirmation as an Action Journal entry.
+
+        Best-effort: a journaling failure never crashes the UI path.
+        """
+        if route_res is None:
+            return
+        try:
+            journal = ExecutionJournal(self.history, self.current_conv_id)
+            journal.record(
+                tool_name=route_res.tool_name,
+                arguments=route_res.raw_arguments,
+                status="CANCELLED",
+                summary="Action cancelled by user.",
+            )
+        except Exception:
+            pass

@@ -416,7 +416,7 @@ class _FakeGeminiClient:
         self.executor = executor
         self.loop_calls = 0
 
-    def execute_reasoning_loop(self, user_query):
+    def execute_reasoning_loop(self, user_query, history=None, journal=None, **kwargs):
         self.loop_calls += 1
         calls = []
 

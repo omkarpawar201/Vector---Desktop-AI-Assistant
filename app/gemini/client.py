@@ -71,7 +71,9 @@ class GeminiClient:
     def execute_reasoning_loop(
         self,
         user_query: str,
-        history: Optional[List[Dict[str, str]]] = None
+        history: Optional[List[Dict[str, str]]] = None,
+        journal: Optional[Any] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Executes a multi-tool reasoning loop with Gemini API.
@@ -142,6 +144,7 @@ class GeminiClient:
                 res, sm = self.executor.execute_tool(
                     tool_name=tool_name,
                     raw_args=raw_args,
+                    journal=journal,
                 )
 
                 tool_calls_executed.append({

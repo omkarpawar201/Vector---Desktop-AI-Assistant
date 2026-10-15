@@ -13,6 +13,7 @@ from app.core.context import ContextBuilder
 from app.core.matcher import Tier0Matcher
 from app.gemini.client import GeminiClient
 from app.memory.history import HistoryManager
+from app.memory.journal import ExecutionJournal
 from app.needle.client import NeedleClient
 from app.tools.base import ToolResult
 from app.tools.executor import PendingApproval, SafeToolExecutor
@@ -86,6 +87,9 @@ class IntentRouter:
 
         query = user_query.strip()
         trace: List[Dict[str, Any]] = []
+        # One Action Journal per routed command; every real execution below is
+        # recorded against it (typed, voice and Gemini tool calls alike).
+        journal = self._build_journal(conversation_id)
 
         # =====================================================================
         # 1. TIER 0: Direct Matcher (< 5-10 ms Reflexes)
@@ -97,6 +101,7 @@ class IntentRouter:
             res, sm = self.executor.execute_tool(
                 tool_name=tier0_match.tool_name,
                 raw_args=tier0_match.arguments,
+                journal=journal,
             )
 
             if not res.success and res.error == "CONFIRMATION_REQUIRED":
@@ -133,6 +138,7 @@ class IntentRouter:
             res, sm = self.executor.execute_tool(
                 tool_name=onnx_res.tool_name,
                 raw_args=onnx_res.arguments,
+                journal=journal,
             )
 
             if not res.success and res.error == "CONFIRMATION_REQUIRED":
@@ -200,6 +206,7 @@ class IntentRouter:
                 res, sm = self.executor.execute_tool(
                     tool_name=needle_res.tool_name,
                     raw_args=needle_res.arguments,
+                    journal=journal,
                 )
 
                 if not res.success and res.error == "CONFIRMATION_REQUIRED":
@@ -238,10 +245,12 @@ class IntentRouter:
             history = self._conversation_context(conversation_id, query)
             if history:
                 gemini_output = self.gemini_client.execute_reasoning_loop(
-                    user_query=query, history=history
+                    user_query=query, history=history, journal=journal
                 )
             else:
-                gemini_output = self.gemini_client.execute_reasoning_loop(user_query=query)
+                gemini_output = self.gemini_client.execute_reasoning_loop(
+                    user_query=query, journal=journal
+                )
 
             completed = self._completed_from_calls(gemini_output.get("tool_calls"))
 
@@ -274,6 +283,17 @@ class IntentRouter:
             response_text="Gemini unavailable. I can still handle local desktop commands (volume, apps, stats, power, media).",
             execution_trace=trace
         )
+
+    def _build_journal(self, conversation_id: Optional[str]) -> Optional[ExecutionJournal]:
+        """
+        An Action Journal bound to the active conversation, or ``None``.
+
+        ``None`` when no history manager is configured, so the executor/
+        Gemini-client plumbing degrades to a no-op and behaviour is unchanged.
+        """
+        if self.history_manager is None:
+            return None
+        return ExecutionJournal(self.history_manager, conversation_id)
 
     def _conversation_context(
         self,
@@ -372,7 +392,11 @@ class IntentRouter:
             )
         return results
 
-    def execute_approved(self, approval: PendingApproval) -> ToolResult:
+    def execute_approved(
+        self,
+        approval: PendingApproval,
+        conversation_id: Optional[str] = None
+    ) -> ToolResult:
         """
         Executes the exact action the user approved.
 
@@ -380,6 +404,10 @@ class IntentRouter:
         (tool, validated arguments) the user saw are executed, through the full
         executor pipeline.  The approval is single-use, so a second call with the
         same token is refused by the executor.
+
+        ``conversation_id`` names the conversation the approved action belongs to
+        so the real execution is journaled alongside the request that produced it.
         """
-        res, _sm = self.executor.execute_approved(approval)
+        journal = self._build_journal(conversation_id)
+        res, _sm = self.executor.execute_approved(approval, journal=journal)
         return res

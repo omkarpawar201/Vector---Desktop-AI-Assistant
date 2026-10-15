@@ -77,7 +77,7 @@ class _RecordingGeminiClient:
         self._requires_confirmation = requires_confirmation
         self.calls = []
 
-    def execute_reasoning_loop(self, user_query=None, history=None):
+    def execute_reasoning_loop(self, user_query=None, history=None, journal=None, **kwargs):
         self.calls.append({"query": user_query, "history": history})
         if self._requires_confirmation:
             return {

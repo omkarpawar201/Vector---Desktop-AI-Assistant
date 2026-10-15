@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.config.constants import ExecutionState
 from app.core.state_machine import ExecutionStateMachine
+from app.memory.journal import ExecutionJournal, JournalStatus
 from app.security.permissions import PermissionEngine
 from app.security.validator import ArgumentValidator
 from app.tools.base import ToolResult
@@ -102,11 +103,40 @@ class SafeToolExecutor:
         self.registry = registry or get_tool_registry()
         self.permission_engine = permission_engine or PermissionEngine()
 
+    @staticmethod
+    def _journal(
+        journal: Optional[ExecutionJournal],
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]],
+        status: str,
+        summary: str = "",
+    ) -> None:
+        """
+        Best-effort Action Journal write.
+
+        Journaling must never change the execution outcome, so any failure here
+        (including a misbehaving journal) is swallowed.  It is always called
+        *after* the tool code runs, so a logging failure can never trigger a
+        re-execution.
+        """
+        if journal is None:
+            return
+        try:
+            journal.record(
+                tool_name=tool_name,
+                arguments=arguments or {},
+                status=status,
+                summary=summary,
+            )
+        except Exception:
+            pass
+
     def execute_tool(
         self,
         tool_name: str,
         raw_args: Dict[str, Any],
-        approval: Optional[PendingApproval] = None
+        approval: Optional[PendingApproval] = None,
+        journal: Optional[ExecutionJournal] = None
     ) -> Tuple[ToolResult, ExecutionStateMachine]:
         """
         Executes a tool by name with safety checks.
@@ -116,6 +146,9 @@ class SafeToolExecutor:
         matching, unconsumed ``approval`` is supplied; otherwise the call stops at
         the CONFIRMATION state with an error carrying the validated arguments so
         the caller can bind a confirmation to this exact action.
+
+        When ``journal`` is supplied, the real outcome of this attempt is
+        recorded against it (see :class:`app.memory.journal.ExecutionJournal`).
         """
         request_id = str(uuid4())
         sm = ExecutionStateMachine(request_id=request_id, tool_name=tool_name)
@@ -125,6 +158,8 @@ class SafeToolExecutor:
         tool = self.registry.get(tool_name)
         if not tool:
             sm.transition_to(ExecutionState.FAILED, f"Tool '{tool_name}' is not registered.")
+            self._journal(journal, tool_name, raw_args, JournalStatus.TOOL_NOT_FOUND,
+                          f"Tool '{tool_name}' not found.")
             return (
                 ToolResult.fail(tool=tool_name, error="TOOL_NOT_FOUND", message=f"Tool '{tool_name}' not found."),
                 sm
@@ -136,6 +171,7 @@ class SafeToolExecutor:
         if not val_res.valid:
             err_msg = "; ".join(val_res.errors)
             sm.transition_to(ExecutionState.FAILED, f"Parameter validation failed: {err_msg}")
+            self._journal(journal, tool_name, raw_args, JournalStatus.INVALID_ARGUMENTS, err_msg)
             return (
                 ToolResult.fail(tool=tool_name, error="INVALID_ARGUMENTS", message=err_msg),
                 sm
@@ -147,6 +183,8 @@ class SafeToolExecutor:
 
         if not perm_res.allowed:
             sm.transition_to(ExecutionState.FAILED, perm_res.reason)
+            self._journal(journal, tool_name, val_res.cleaned_args,
+                          JournalStatus.PERMISSION_DENIED, perm_res.reason)
             return (
                 ToolResult.fail(tool=tool_name, error="PERMISSION_BLOCKED", message=perm_res.reason),
                 sm
@@ -156,6 +194,12 @@ class SafeToolExecutor:
         if perm_res.requires_confirmation:
             if approval is None:
                 sm.transition_to(ExecutionState.CONFIRMATION, "Awaiting explicit user confirmation.")
+                # Recorded as pending confirmation -- deliberately NOT a success.
+                self._journal(
+                    journal, tool_name, val_res.cleaned_args,
+                    JournalStatus.CONFIRMATION_REQUIRED,
+                    f"Action '{tool_name}' requires confirmation: {perm_res.reason}",
+                )
                 return (
                     ToolResult(
                         success=False,
@@ -170,6 +214,11 @@ class SafeToolExecutor:
             # mismatched request can neither consume nor ride an approval.
             if not approval.matches(tool_name, val_res.cleaned_args):
                 sm.transition_to(ExecutionState.FAILED, "Approval does not authorize this action.")
+                self._journal(
+                    journal, tool_name, val_res.cleaned_args,
+                    JournalStatus.APPROVAL_REJECTED,
+                    "The approved action does not match this request.",
+                )
                 return (
                     ToolResult.fail(
                         tool=tool_name,
@@ -182,6 +231,11 @@ class SafeToolExecutor:
             # proceeds, and the lock is released before the tool executes.
             if not approval.try_consume():
                 sm.transition_to(ExecutionState.FAILED, "Approval has already been consumed.")
+                self._journal(
+                    journal, tool_name, val_res.cleaned_args,
+                    JournalStatus.APPROVAL_REJECTED,
+                    "This confirmation was already used.",
+                )
                 return (
                     ToolResult.fail(
                         tool=tool_name,
@@ -197,12 +251,18 @@ class SafeToolExecutor:
             result = tool.execute(**val_res.cleaned_args)
             if result.success:
                 sm.transition_to(ExecutionState.SUCCESS, "Execution completed successfully.")
+                self._journal(journal, tool_name, val_res.cleaned_args,
+                              JournalStatus.SUCCESS, result.message)
             else:
                 sm.transition_to(ExecutionState.FAILED, f"Tool reported failure: {result.error}")
+                self._journal(journal, tool_name, val_res.cleaned_args,
+                              JournalStatus.FAILED, result.message or str(result.error or ""))
             return (result, sm)
         except Exception as e:
             err_str = str(e)
             sm.transition_to(ExecutionState.FAILED, f"Unhandled exception during tool execution: {err_str}")
+            self._journal(journal, tool_name, val_res.cleaned_args,
+                          JournalStatus.FAILED, err_str)
             return (
                 ToolResult.fail(tool=tool_name, error="EXECUTION_EXCEPTION", message=err_str),
                 sm
@@ -210,7 +270,8 @@ class SafeToolExecutor:
 
     def execute_approved(
         self,
-        approval: PendingApproval
+        approval: PendingApproval,
+        journal: Optional[ExecutionJournal] = None
     ) -> Tuple[ToolResult, ExecutionStateMachine]:
         """
         Executes the exact action a user approved.
@@ -226,5 +287,6 @@ class SafeToolExecutor:
         return self.execute_tool(
             tool_name=tool_name,
             raw_args=arguments,
-            approval=approval
+            approval=approval,
+            journal=journal
         )

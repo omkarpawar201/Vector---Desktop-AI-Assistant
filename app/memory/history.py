@@ -77,6 +77,68 @@ class HistoryManager:
 
         return call_id
 
+    def add_execution(
+        self,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+        status: str = "",
+        summary: str = "",
+        conversation_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        confidence: float = 0.0,
+    ) -> str:
+        """
+        Records one tool execution (an Action Journal entry).
+
+        Unlike :meth:`add_tool_call`, ``message_id`` is optional, so an actual
+        execution can be journaled without manufacturing a message row.  Storage
+        only: callers are responsible for sanitizing ``arguments``/``summary``
+        (see :class:`app.memory.journal.ExecutionJournal`).
+        """
+        call_id = str(uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        args_json = json.dumps(arguments or {})
+
+        with self.db.get_connection() as conn:
+            conn.execute(
+                """INSERT INTO tool_calls
+                   (id, message_id, conversation_id, tool_name, arguments, summary, confidence, execution_status, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (call_id, message_id, conversation_id, tool_name, args_json,
+                 summary, confidence, status, now)
+            )
+            conn.commit()
+
+        return call_id
+
+    def get_recent_tool_calls(
+        self,
+        conversation_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves recent Action Journal entries, newest first.
+
+        With ``conversation_id`` the result is scoped to that conversation.
+        """
+        with self.db.get_connection() as conn:
+            if conversation_id is None:
+                rows = conn.execute(
+                    "SELECT id, conversation_id, tool_name, arguments, summary, "
+                    "execution_status, timestamp FROM tool_calls "
+                    "ORDER BY timestamp DESC, rowid DESC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, conversation_id, tool_name, arguments, summary, "
+                    "execution_status, timestamp FROM tool_calls "
+                    "WHERE conversation_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT ?",
+                    (conversation_id, limit)
+                ).fetchall()
+
+            return [dict(row) for row in rows]
+
     def get_conversation_messages(self, conversation_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Retrieves messages for a conversation ordered by timestamp.
