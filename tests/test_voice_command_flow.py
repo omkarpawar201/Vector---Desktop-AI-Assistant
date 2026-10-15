@@ -464,3 +464,41 @@ def test_worker_error_is_reported_and_does_not_execute(monkeypatch, qapp):
         assert not any(kind == "action" for kind, _ in messages), "a failed worker must not execute a tool"
     finally:
         win.close()
+
+
+# --------------------------------------------------------------------------
+# Tier tracing: RouteResult has no confidence field, and tracing must not crash
+# --------------------------------------------------------------------------
+
+def test_tier_trace_survives_route_result_without_confidence(monkeypatch, qapp, capsys):
+    """
+    Regression for the ``route_res.confidence`` AttributeError.
+
+    ``RouteResult`` never defined a ``confidence`` attribute, so the
+    ``--show-tier`` terminal trace crashed on every command.  The trace must
+    render regardless and fall back to ``-`` when no confidence is available,
+    while still printing one when a caller does provide it.
+    """
+    router = _FakeRouter(lambda q: _result())
+    win, pool, messages = _build_window(monkeypatch, router)
+    win.show_tier_in_terminal = True
+    try:
+        res = _result(tool_name="set_volume")
+        assert not hasattr(res, "confidence"), "RouteResult must not define confidence"
+
+        win._on_route_finished(res)  # must not raise AttributeError
+
+        out = capsys.readouterr().out
+        assert "[tier]" in out, "the tier trace must still be printed"
+        assert "tool=set_volume" in out
+        assert "conf=-" in out, "an absent confidence must render as '-'"
+
+        # When a confidence is actually available it is rendered verbatim.
+        res_with_conf = _result(tool_name="set_volume")
+        res_with_conf.confidence = 0.87
+        win._on_route_finished(res_with_conf)
+
+        out2 = capsys.readouterr().out
+        assert "conf=0.87" in out2
+    finally:
+        win.close()

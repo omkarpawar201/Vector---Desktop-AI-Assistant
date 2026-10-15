@@ -295,12 +295,16 @@ class MainWindow(QMainWindow):
         # Optionally surface the exactly-resolved tier (and its confidence) to the
         # terminal for every command — no UI clutter, just the routing fact.
         if self.show_tier_in_terminal:
+            # RouteResult does not define a confidence field (tier-level
+            # confidence only exists inside some execution_trace steps), so read
+            # it defensively rather than assuming the attribute exists.
+            confidence = getattr(route_res, "confidence", None)
             # flush=True is essential: this GUI app never exits, so an unflushed
             # stdout buffer would swallow every [tier] line until the process dies.
             print(
                 f"[tier] {route_res.tier_used.value!s:18} "
                 f"tool={route_res.tool_name or '-'} "
-                f"conf={route_res.confidence if route_res.confidence else '-'}",
+                f"conf={confidence if confidence else '-'}",
                 flush=True,
             )
 

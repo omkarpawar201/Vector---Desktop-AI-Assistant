@@ -60,6 +60,10 @@ class Tier0Matcher:
         "am i muted": ("get_volume", {}),
         "is it muted": ("get_volume", {}),
         "is the sound muted": ("get_volume", {}),
+        "what is the current volume": ("get_volume", {}),
+        "what is my volume": ("get_volume", {}),
+        "show volume": ("get_volume", {}),
+        "volume level": ("get_volume", {}),
 
         # Media
         "play": ("media_play", {}),
@@ -137,16 +141,22 @@ class Tier0Matcher:
     #: The unit accepts the percent sign or its spoken form ("percent"/"per cent"),
     #: so "volume at 100 percent" is caught here instead of being handed to the model.
     SET_VOLUME_REGEXES = [
-        re.compile(r"^(?:set|make|change)?\s*(?:the)?\s*(?:volume|sound)\s*(?:to|at)?\s*(\d{1,3})\s*(?:%|percent|per cent)?$"),
-        re.compile(r"^(?:volume|sound)\s*(\d{1,3})\s*(?:%|percent|per cent)?$"),
+        re.compile(r"^(?:set|make|change|adjust|turn)?\s*(?:the)?\s*(?:volume|sound|audio)\s*(?:to|at|to\s+be)?\s*(\d{1,3})\s*(?:%|percent|per cent)?$"),
+        re.compile(r"^(?:volume|sound|audio)\s*(\d{1,3})\s*(?:%|percent|per cent)?$"),
     ]
 
     #: Directional phrasings that still name an absolute level, e.g. "volume up
     #: to 50" is a set, not a report.
     SET_VOLUME_VERB_REGEXES = [
-        re.compile(r"^(?:volume|sound)\s*(?:up|down)\s*(?:to)?\s*(\d{1,3})\s*%?$"),
-        re.compile(r"^(?:turn|raise|lower|put|bump|crank|bring)\s*(?:it|the\s+(?:volume|sound))?\s*"
-                   r"(?:up|down)?\s*(?:to)?\s*(\d{1,3})\s*%?$"),
+        re.compile(r"^(?:volume|sound|audio)\s*(?:up|down)\s*(?:to)?\s*(\d{1,3})\s*%?$"),
+        re.compile(r"^(?:turn|raise|lower|put|bump|crank|bring|increase|decrease|drop|boost)\s*(?:it|the\s+(?:volume|sound|audio))?\s*"
+                   r"(?:up|down|to)?\s*(?:to)?\s*(\d{1,3})\s*%?$"),
+    ]
+
+    #: Queries asking for current volume (not setting it).
+    GET_VOLUME_REGEXES = [
+        re.compile(r"^(?:what|how)\s+(?:is\s+)?(?:the\s+)?(?:current\s+)?(?:volume|sound|audio)\s*(?:level|percentage)?\s*(?:now|right\s+now|currently|at\s+the\s+moment)?\s*$"),
+        re.compile(r"^(?:volume|sound|audio)\s*(?:percentage|level)\s*(?:now|right\s+now|currently)?\s*$"),
     ]
 
     #: Resource keyword -> the single tool that owns it. Ordered so the overview
@@ -154,11 +164,13 @@ class Tier0Matcher:
     SYSTEM_RESOURCE_REGEXES = [
         (re.compile(r"\b(?:system\s+(?:stats|overview|information|info|summary)|"
                     r"machine\s+stats|overall\s+stats|system\s+summary)\b"), "get_system_stats"),
-        (re.compile(r"\b(?:battery|charg(?:e|es|ed|ing)|power\s+level)\b"), "get_battery_status"),
+        (re.compile(r"\b(?:battery|charg(?:e|es|ed|ing)|power\s+level|juice)\b"
+                    r"|\bpower\s+status\b|\bpower\s+situation\b|\bcharger\b"), "get_battery_status"),
         (re.compile(r"\b(?:ram|memory)\b"), "get_memory_usage"),
         (re.compile(r"\bcpu\b|\bprocessor\b"), "get_cpu_usage"),
-        (re.compile(r"\b(?:disk|storage)\b|\bhow\s+much\s+space\b|"
-                    r"\b(?:space|room)\s+(?:is\s+)?(?:available|left|free)\b"), "get_disk_usage"),
+        (re.compile(r"\b(?:disk|storage|drive|hard\s+drive|hdd|ssd)\b"
+                    r"|\bhow\s+much\s+(?:space|storage)\b"
+                    r"|\b(?:space|room|gigs?|gigabytes?|mb|gb|capacity)\s+(?:is\s+)?(?:available|left|free)\b"), "get_disk_usage"),
     ]
 
     # ------------------------------------------------------------------
@@ -314,11 +326,16 @@ class Tier0Matcher:
     #: Verb phrases that mean "start / resume playback".
     MEDIA_PLAY_PATTERNS = [
         # start|begin|resume|continue|keep|play [the|it|on|up|back|playing] <object>
-        re.compile(r"^(?:start|begin|resume|continue|keep|carry\s+on|play)\s+"
+        re.compile(r"^(?:start|begin|resume|continue|keep|carry\s+on|play|"
+                   r"unpause|restart|replay|go\s+back\s+to|return\s+to)\s+"
                    r"(?:the\s+|this\s+|that\s+|it\s+|on\s+|up\s+|back\s+|"
                    r"playing\s+|please\s+|just\s+)*"
                    r"(?:music|song|track|playback|audio|media|video|podcast|"
-                   r"tv|show|playing|play)"
+                   r"tv|show|playing|play|earlier\s+track|earlier\s+song|where\s+we\s+left|"
+                   r"where\s+i\s+left)"
+                   + _MEDIA_FILLER + r"$"),
+        re.compile(r"^(?:unpause|resume|continue|play\s+again|fire\s+up)\s+(?:the\s+)?"
+                   r"(?:music|song|track|audio|playback|media|it)"
                    + _MEDIA_FILLER + r"$"),
         re.compile(r"^(?:unpause|resume|continue)\s*$"),
         # "keep the music going" / "let the music keep playing"
@@ -329,13 +346,17 @@ class Tier0Matcher:
         re.compile(r"^keep\s+(?:the\s+|it\s+)?(?:music|audio|playback|song|"
                    r"track)\s+(?:going|playing|on|rolling)"
                    + _MEDIA_FILLER + r"$"),
+        re.compile(r"^(?:bring\s+(?:the\s+)?(?:audio|music|sound)\s+back|"
+                   r"restart\s+(?:the\s+)?(?:music|audio|playback)|"
+                   r"start\s+playing\s+(?:again|back)|fire\s+up\s+(?:the\s+)?(?:music|audio|sound))"
+                   + _MEDIA_FILLER + r"$"),
     ]
 
     #: Verb phrases that mean "pause".
     MEDIA_PAUSE_PATTERNS = [
-        re.compile(r"^(?:pause|halt)\s+(?:the\s+|this\s+|that\s+)*"
+        re.compile(r"^(?:pause|halt|suspend)\s+(?:the\s+|this\s+|that\s+)*"
                    + _MEDIA_OBJECT + r"(?:\s+player)?$"),
-        re.compile(r"^(?:pause|halt)\s*$"),
+        re.compile(r"^(?:pause|halt|suspend)\s*$"),
         # "stop the music" is pause; "stop spotify" is closing an app, so the
         # object is required here.
         re.compile(r"^(?:stop|end)\s+(?:the\s+|this\s+|that\s+)*"
@@ -346,34 +367,33 @@ class Tier0Matcher:
     #: Verb phrases that mean "skip to the next item".
     MEDIA_NEXT_PATTERNS = [
         re.compile(r"^(?:skip|jump|move|switch|go|scroll|fast[-\s]?forward|"
-                   r"fwd|advance|roll)\s*"
-                   r"(?:on\s+|over\s+|to\s+|forward\s+|ahead\s+)*"
-                   r"(?:the\s+)?(?:next\s+)?"
-                   + _MEDIA_OBJECT + r"?\s*$"),
+                   r"fwd|advance|roll|hit)\b.*(?:next|forward|ahead)\b.*$"),
         re.compile(r"^(?:next|forward|advance|skip)\s*"
                    r"(?:the\s+)?(?:one\s+|track\s+|song\s+)?"
                    + _MEDIA_OBJECT + r"?\s*$"),
         re.compile(r"^(?:play|listen\s+to|listen\s+for)\s+(?:the\s+)?next\s+"
                    + _MEDIA_OBJECT + r"\s*$"),
-        re.compile(r"^(?:skip|go|move|jump)\s+(?:forward|ahead|on)\s*$"),
+        re.compile(r"^(?:skip|go|move|jump|hit)\s+(?:forward|ahead|on)\s*$"),
     ]
 
     #: Verb phrases that mean "go back to the previous item".
     MEDIA_PREV_PATTERNS = [
         re.compile(r"^(?:go|move|jump|switch|scroll|take\s+me|play|listen\s+to|"
-                   r"return|rewind|fast[-\s]?back|replay)\s*"
+                   r"return|rewind|fast[-\s]?back|replay|step|reverse)\s*"
                    r"(?:me\s+)?(?:back\s*)?(?:one\s*)?(?:to\s+)?(?:the\s+)?"
-                   r"(?:previous|last|prior|preceding)\s+"
+                   r"(?:previous|last|prior|preceding|earlier)\s+"
                    + _MEDIA_OBJECT + r"?\s*$"),
-        re.compile(r"^(?:previous|prev|last|prior|preceding|back|rewind)\s*"
+        re.compile(r"^(?:previous|prev|last|prior|preceding|back|rewind|earlier)\s*"
                    r"(?:one\s*)?(?:the\s+)?"
                    + _MEDIA_OBJECT + r"?\s*$"),
-        # "take me back one song", "go back one track"
-        re.compile(r"^(?:take\s+me\s+|go\s+|move\s+|jump\s+)?"
-                   r"(?:back|rewind|return)\s*(?:me\s+)?(?:one\s+)?"
+        # "take me back one song", "go back one track", "step back one track"
+        re.compile(r"^(?:take\s+me\s+|go\s+|move\s+|jump\s+|step\s+)?"
+                   r"(?:back|rewind|return|reverse)\s*(?:me\s+)?(?:one\s+)?"
                    r"(?:to\s+)?(?:the\s+)?"
                    + _MEDIA_OBJECT + r"?\s*$"),
         re.compile(r"^(?:take\s+me\s+)?(?:back|rewind)\s*(?:me\s+)?$"),
+        re.compile(r"^(?:step\s+back|go\s+back|reverse)\s+(?:to\s+)?(?:the\s+)?(?:earlier|previous)\s+"
+                   + _MEDIA_OBJECT + r"?\s*$"),
     ]
 
     #: Ordered so the most specific intent wins. Play is deliberately last: a
@@ -717,6 +737,18 @@ class Tier0Matcher:
                 )
 
         # 2. Regex volume extraction
+        # Check get_volume first (no numeric level implied)
+        for pattern in cls.GET_VOLUME_REGEXES:
+            m = pattern.match(normalized)
+            if m:
+                return MatchResult(
+                    matched=True,
+                    tool_name="get_volume",
+                    arguments={},
+                    confidence=1.0,
+                    reason="Tier 0 regex match get_volume"
+                )
+
         for pattern in cls.SET_VOLUME_REGEXES:
             m = pattern.match(normalized)
             if m:
