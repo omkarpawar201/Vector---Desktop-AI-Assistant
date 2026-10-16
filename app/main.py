@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from app.config.settings import get_settings
 from app.memory.database import get_db_manager
+from app.ui.diagnostics import RecentErrorLog
 from app.ui.main_window import MainWindow
 
 
@@ -40,6 +41,10 @@ def main() -> int:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+
+    # Attach the bounded, in-memory error sink so the Diagnostics report can
+    # surface a few recent sanitized errors. Purely passive: no file, no network.
+    RecentErrorLog.install()
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")

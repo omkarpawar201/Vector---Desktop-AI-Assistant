@@ -6,6 +6,7 @@ Displays real-time system monitoring metrics (CPU, RAM, Disk, Volume).
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QFrame, QWidget
 import psutil
+from app.config import APP_NAME, APP_VERSION
 from app.tools.system.volume import GetVolumeTool
 
 
@@ -39,7 +40,7 @@ class StatusBarWidget(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
 
-        self.lbl_brand = QLabel("VECTOR 1.0", self)
+        self.lbl_brand = QLabel(f"{APP_NAME.upper()} {APP_VERSION}", self)
         self.lbl_brand.setObjectName("brand")
 
         self.lbl_cpu = QLabel("CPU: --%", self)

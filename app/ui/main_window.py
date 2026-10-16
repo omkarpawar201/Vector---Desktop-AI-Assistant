@@ -45,6 +45,7 @@ from app.ui.action_history import ActionHistoryDialog
 from app.ui.chat_view import ChatViewWidget
 from app.ui.command_input import CommandInputWidget
 from app.ui.confirmation_dialog import ConfirmationDialog
+from app.ui.diagnostics import DiagnosticsDialog
 from app.ui.settings import SettingsDialog
 from app.ui.status_bar import StatusBarWidget
 from app.ui.system_health import SystemHealthDialog
@@ -206,10 +207,15 @@ class MainWindow(QMainWindow):
         btn_health.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
         btn_health.clicked.connect(self._open_system_health)
 
+        btn_diagnostics = QPushButton("📋 Diagnostics", header)
+        btn_diagnostics.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_diagnostics.clicked.connect(self._open_diagnostics)
+
         header_layout.addWidget(lbl_title)
         header_layout.addStretch()
         header_layout.addWidget(btn_history)
         header_layout.addWidget(btn_health)
+        header_layout.addWidget(btn_diagnostics)
         header_layout.addWidget(btn_settings)
 
         main_layout.addWidget(header)
@@ -243,6 +249,11 @@ class MainWindow(QMainWindow):
     def _open_system_health(self) -> None:
         """Open the read-only System Health dashboard."""
         dialog = SystemHealthDialog(self.settings, self.history, parent=self)
+        dialog.exec()
+
+    def _open_diagnostics(self) -> None:
+        """Open the read-only Diagnostics & Troubleshooting view."""
+        dialog = DiagnosticsDialog(self.settings, self.history, parent=self)
         dialog.exec()
 
     def _handle_voice_toggle(self, active: bool) -> None:
