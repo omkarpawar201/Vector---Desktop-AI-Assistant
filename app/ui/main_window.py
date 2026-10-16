@@ -47,6 +47,7 @@ from app.ui.command_input import CommandInputWidget
 from app.ui.confirmation_dialog import ConfirmationDialog
 from app.ui.settings import SettingsDialog
 from app.ui.status_bar import StatusBarWidget
+from app.ui.system_health import SystemHealthDialog
 from app.voice.listener import VoiceListener
 from app.voice.tts import TTSEngine
 
@@ -201,9 +202,14 @@ class MainWindow(QMainWindow):
         btn_history.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
         btn_history.clicked.connect(self._open_action_history)
 
+        btn_health = QPushButton("🩺 Health", header)
+        btn_health.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_health.clicked.connect(self._open_system_health)
+
         header_layout.addWidget(lbl_title)
         header_layout.addStretch()
         header_layout.addWidget(btn_history)
+        header_layout.addWidget(btn_health)
         header_layout.addWidget(btn_settings)
 
         main_layout.addWidget(header)
@@ -232,6 +238,11 @@ class MainWindow(QMainWindow):
     def _open_action_history(self) -> None:
         """Open the read-only Action History view for the active conversation."""
         dialog = ActionHistoryDialog(self.history, self.current_conv_id, parent=self)
+        dialog.exec()
+
+    def _open_system_health(self) -> None:
+        """Open the read-only System Health dashboard."""
+        dialog = SystemHealthDialog(self.settings, self.history, parent=self)
         dialog.exec()
 
     def _handle_voice_toggle(self, active: bool) -> None:
