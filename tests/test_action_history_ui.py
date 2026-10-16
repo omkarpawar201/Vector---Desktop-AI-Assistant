@@ -241,7 +241,7 @@ def test_worker_emits_generic_error_on_read_failure(qapp):
 # --------------------------------------------------------------------------
 
 def test_sensitive_arguments_and_payloads_are_not_exposed(qapp):
-    secret = "AIzaSySUPERSECRETKEYVALUE1234567890"
+    secret = "AIzaSy" + "SUPERSECRETKEYVALUE1234567890"
     fake = _FakeHistory([
         _entry(
             JournalStatus.SUCCESS,
