@@ -41,6 +41,7 @@ from app.tools.windows.manager import (
     MoveWindowTool,
     ResizeWindowTool,
 )
+from app.ui.action_history import ActionHistoryDialog
 from app.ui.chat_view import ChatViewWidget
 from app.ui.command_input import CommandInputWidget
 from app.ui.confirmation_dialog import ConfirmationDialog
@@ -196,8 +197,13 @@ class MainWindow(QMainWindow):
         btn_settings.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
         btn_settings.clicked.connect(self._open_settings)
 
+        btn_history = QPushButton("🕑 History", header)
+        btn_history.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_history.clicked.connect(self._open_action_history)
+
         header_layout.addWidget(lbl_title)
         header_layout.addStretch()
+        header_layout.addWidget(btn_history)
         header_layout.addWidget(btn_settings)
 
         main_layout.addWidget(header)
@@ -221,6 +227,11 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self)
+        dialog.exec()
+
+    def _open_action_history(self) -> None:
+        """Open the read-only Action History view for the active conversation."""
+        dialog = ActionHistoryDialog(self.history, self.current_conv_id, parent=self)
         dialog.exec()
 
     def _handle_voice_toggle(self, active: bool) -> None:
