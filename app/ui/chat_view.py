@@ -3,13 +3,14 @@ Chat view widget displaying conversation history and visual tool result cards.
 """
 
 from typing import Any, Dict, Optional
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -79,10 +80,30 @@ class ChatViewWidget(QWidget):
     Main conversation view widget.
     """
 
+    #: Emitted when the user asks to load older messages of the shown
+    #: conversation.  The window owns pagination and answers the request.
+    load_earlier_requested = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        self.btn_load_earlier = QPushButton("↑ Load earlier messages", self)
+        self.btn_load_earlier.setStyleSheet("""
+            QPushButton {
+                background-color: #313244;
+                color: #cdd6f4;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 12px;
+                margin: 6px;
+            }
+            QPushButton:hover { background-color: #45475a; }
+        """)
+        self.btn_load_earlier.clicked.connect(self.load_earlier_requested.emit)
+        self.btn_load_earlier.hide()
+        layout.addWidget(self.btn_load_earlier)
 
         self.list_widget = QListWidget(self)
         self.list_widget.setStyleSheet("""
@@ -103,6 +124,10 @@ class ChatViewWidget(QWidget):
     def clear(self) -> None:
         """Removes every item from the conversation view."""
         self.list_widget.clear()
+
+    def set_load_more_visible(self, visible: bool) -> None:
+        """Shows or hides the "load earlier messages" control."""
+        self.btn_load_earlier.setVisible(bool(visible))
 
     def add_user_message(self, text: str) -> None:
         """Adds a user message item to the chat view."""

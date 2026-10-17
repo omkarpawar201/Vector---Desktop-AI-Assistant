@@ -9,6 +9,21 @@ from uuid import uuid4
 
 from app.memory.database import DatabaseManager, get_db_manager
 
+#: Title used whenever a conversation is created or renamed with a blank title.
+DEFAULT_CONVERSATION_TITLE = "New Chat"
+
+
+def normalize_title(title: Optional[str]) -> str:
+    """
+    Return a always-usable conversation title.
+
+    A missing, empty or whitespace-only title becomes
+    :data:`DEFAULT_CONVERSATION_TITLE`; every other title is returned stripped
+    of leading/trailing whitespace (interior spacing is preserved verbatim).
+    """
+    text = (title or "").strip()
+    return text or DEFAULT_CONVERSATION_TITLE
+
 
 class HistoryManager:
     """
@@ -21,6 +36,9 @@ class HistoryManager:
     def create_conversation(self, title: str = "New Session") -> str:
         """
         Creates a new conversation record and returns its unique ID.
+
+        A blank/whitespace-only ``title`` is replaced by a safe default so a
+        conversation can never be stored under an unusable name.
         """
         conv_id = str(uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -28,7 +46,7 @@ class HistoryManager:
         with self.db.get_connection() as conn:
             conn.execute(
                 "INSERT INTO conversations (id, created_at, title) VALUES (?, ?, ?)",
-                (conv_id, now, title)
+                (conv_id, now, normalize_title(title))
             )
             conn.commit()
 
@@ -266,3 +284,161 @@ class HistoryManager:
             ).fetchall()
 
             return [dict(row) for row in reversed(rows)]
+
+    # ------------------------------------------------------------------
+    # Conversation management (listing, search, rename, delete, paging)
+    # ------------------------------------------------------------------
+
+    #: Columns shared by every conversation summary query.
+    _SUMMARY_COLUMNS = (
+        "c.id AS id, c.title AS title, c.created_at AS created_at, "
+        "COALESCE(MAX(m.timestamp), c.created_at) AS last_activity, "
+        "COUNT(m.id) AS message_count"
+    )
+
+    def list_conversations(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Returns every conversation as a summary, most recently active first.
+
+        Each summary carries ``id``, ``title``, ``created_at``, ``last_activity``
+        (the newest message time, falling back to ``created_at``) and
+        ``message_count``.  Ordering is by ``last_activity`` descending, then
+        ``created_at`` descending, so the sidebar's recency grouping is stable.
+        """
+        sql = (
+            f"SELECT {self._SUMMARY_COLUMNS} FROM conversations c "
+            "LEFT JOIN messages m ON m.conversation_id = c.id "
+            "GROUP BY c.id ORDER BY last_activity DESC, c.created_at DESC"
+        )
+        params: tuple = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+
+        with self.db.get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(row) for row in rows]
+
+    def search_conversations(
+        self, query: str, limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns conversation summaries whose title or any message matches
+        ``query`` (case-insensitive substring), most recently active first.
+
+        A blank query lists everything, so the sidebar can reuse this method for
+        both browsing and searching.  ``LIKE`` wildcards in the query are escaped
+        so a literal ``%`` or ``_`` is matched rather than acting as a wildcard.
+        """
+        text = (query or "").strip()
+        if not text:
+            return self.list_conversations(limit=limit)
+
+        pattern = self._like_pattern(text)
+        sql = (
+            f"SELECT {self._SUMMARY_COLUMNS} FROM conversations c "
+            "LEFT JOIN messages m ON m.conversation_id = c.id "
+            "WHERE c.title LIKE ? ESCAPE '\\' "
+            "OR c.id IN (SELECT conversation_id FROM messages WHERE content LIKE ? ESCAPE '\\') "
+            "GROUP BY c.id ORDER BY last_activity DESC, c.created_at DESC"
+        )
+        params: tuple = (pattern, pattern)
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (pattern, pattern, limit)
+
+        with self.db.get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+            return [dict(row) for row in rows]
+
+    @staticmethod
+    def _like_pattern(query: str) -> str:
+        escaped = (
+            query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        return f"%{escaped}%"
+
+    def count_conversation_messages(self, conversation_id: str) -> int:
+        """Returns how many messages a conversation holds (0 when missing)."""
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?",
+                (conversation_id,)
+            ).fetchone()
+            return int(row["n"]) if row is not None else 0
+
+    def get_conversation_page(
+        self, conversation_id: str, limit: int = 50, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns one chronological page of a conversation, counted from the end.
+
+        ``offset == 0`` is the *newest* ``limit`` messages; ``offset == limit``
+        is the previous ``limit``, and so on -- so the UI can incrementally load
+        older history without ever silently truncating.  Each page is returned in
+        chronological (oldest-first) order, with ``rowid`` as a tie-break so
+        messages sharing a timestamp keep their insertion order.
+        """
+        safe_limit = max(0, int(limit))
+        safe_offset = max(0, int(offset))
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, timestamp FROM messages "
+                "WHERE conversation_id = ? "
+                "ORDER BY timestamp DESC, rowid DESC LIMIT ? OFFSET ?",
+                (conversation_id, safe_limit, safe_offset)
+            ).fetchall()
+            return [dict(row) for row in reversed(rows)]
+
+    def rename_conversation(self, conversation_id: str, title: str) -> bool:
+        """
+        Renames one conversation.  Returns ``True`` when a row was updated.
+
+        The new title is normalized, so an empty/whitespace-only request falls
+        back to a safe default instead of storing an unusable name.
+        """
+        with self.db.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE conversations SET title = ? WHERE id = ?",
+                (normalize_title(title), conversation_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """
+        Deletes one conversation and everything that belongs to it.
+
+        Returns ``True`` when a conversation row was removed, ``False`` when the
+        id did not exist (so a stray delete can never touch an unrelated
+        conversation).  All three deletes run in a single transaction:
+
+        * Action Journal entries scoped to the conversation (``tool_calls`` with
+          this ``conversation_id``) or attached to one of its messages;
+        * the conversation's messages;
+        * the conversation row itself.
+
+        The journal rows are removed explicitly rather than relying on the
+        message foreign key, because Action Journal entries are stored with
+        ``message_id = NULL`` and would otherwise be orphaned.
+        """
+        with self.db.get_connection() as conn:
+            try:
+                conn.execute(
+                    "DELETE FROM tool_calls WHERE conversation_id = ? "
+                    "OR message_id IN (SELECT id FROM messages WHERE conversation_id = ?)",
+                    (conversation_id, conversation_id)
+                )
+                conn.execute(
+                    "DELETE FROM messages WHERE conversation_id = ?",
+                    (conversation_id,)
+                )
+                cursor = conn.execute(
+                    "DELETE FROM conversations WHERE id = ?",
+                    (conversation_id,)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception:
+                conn.rollback()
+                raise
