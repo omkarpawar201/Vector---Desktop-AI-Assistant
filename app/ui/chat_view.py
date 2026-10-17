@@ -100,6 +100,10 @@ class ChatViewWidget(QWidget):
         """)
         layout.addWidget(self.list_widget)
 
+    def clear(self) -> None:
+        """Removes every item from the conversation view."""
+        self.list_widget.clear()
+
     def add_user_message(self, text: str) -> None:
         """Adds a user message item to the chat view."""
         item = QListWidgetItem(self.list_widget)

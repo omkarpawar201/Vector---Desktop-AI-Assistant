@@ -45,6 +45,7 @@ from app.ui.action_history import ActionHistoryDialog
 from app.ui.chat_view import ChatViewWidget
 from app.ui.command_input import CommandInputWidget
 from app.ui.confirmation_dialog import ConfirmationDialog
+from app.ui.conversation_io import ConversationIODialog
 from app.ui.diagnostics import DiagnosticsDialog
 from app.ui.settings import SettingsDialog
 from app.ui.status_bar import StatusBarWidget
@@ -211,11 +212,16 @@ class MainWindow(QMainWindow):
         btn_diagnostics.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
         btn_diagnostics.clicked.connect(self._open_diagnostics)
 
+        btn_backup = QPushButton("💾 Backup", header)
+        btn_backup.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_backup.clicked.connect(self._open_conversation_io)
+
         header_layout.addWidget(lbl_title)
         header_layout.addStretch()
         header_layout.addWidget(btn_history)
         header_layout.addWidget(btn_health)
         header_layout.addWidget(btn_diagnostics)
+        header_layout.addWidget(btn_backup)
         header_layout.addWidget(btn_settings)
 
         main_layout.addWidget(header)
@@ -255,6 +261,49 @@ class MainWindow(QMainWindow):
         """Open the read-only Diagnostics & Troubleshooting view."""
         dialog = DiagnosticsDialog(self.settings, self.history, parent=self)
         dialog.exec()
+
+    def _open_conversation_io(self) -> None:
+        """Open the Conversation Backup dialog (export / import)."""
+        dialog = ConversationIODialog(self.history, self.current_conv_id, parent=self)
+        dialog.conversation_imported.connect(self._on_conversation_imported)
+        dialog.exec()
+
+    def _on_conversation_imported(self, conversation_id: str) -> None:
+        """
+        Make a freshly imported conversation the active one.
+
+        The imported messages are read back from storage and rendered so the
+        restored conversation is immediately usable through the existing
+        conversation workflow.  Imported text is only displayed, never routed.
+        """
+        if not conversation_id:
+            return
+        self.current_conv_id = conversation_id
+        self._load_conversation_into_view(conversation_id)
+
+    def _load_conversation_into_view(self, conversation_id: str) -> None:
+        """Render a stored conversation's messages into the chat view."""
+        self.chat_view.clear()
+
+        reader = getattr(self.history, "get_conversation_messages", None)
+        if reader is None:
+            return
+        try:
+            messages = reader(conversation_id, limit=None)
+        except Exception:
+            messages = []
+
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            content = str(message.get("content", ""))
+            if role == "user":
+                self.chat_view.add_user_message(content)
+            elif role == "assistant":
+                self.chat_view.add_assistant_message(content)
+            # Any other role (e.g. an inert imported 'system' row) is not
+            # rendered and is never treated as an instruction.
 
     def _handle_voice_toggle(self, active: bool) -> None:
         if not active:

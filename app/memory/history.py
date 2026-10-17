@@ -139,15 +139,96 @@ class HistoryManager:
 
             return [dict(row) for row in rows]
 
-    def get_conversation_messages(self, conversation_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieves messages for a conversation ordered by timestamp.
+        Retrieves one conversation's metadata (``id``, ``title``, ``created_at``).
+
+        Returns ``None`` when no such conversation exists.  Used by conversation
+        export so the exported header reflects stored metadata rather than a
+        guess.
         """
         with self.db.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT id, role, content, timestamp FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC LIMIT ?",
-                (conversation_id, limit)
-            ).fetchall()
+            row = conn.execute(
+                "SELECT id, created_at, title FROM conversations WHERE id = ?",
+                (conversation_id,)
+            ).fetchone()
+
+            return dict(row) if row is not None else None
+
+    def conversation_exists(self, conversation_id: str) -> bool:
+        """True when a conversation with this id already exists."""
+        with self.db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+
+            return row is not None
+
+    def import_conversation(
+        self,
+        conversation_id: str,
+        title: str,
+        created_at: Optional[str],
+        messages: List[Dict[str, str]],
+    ) -> None:
+        """
+        Inserts a whole imported conversation in a single transaction.
+
+        The conversation row and every message are written together: if any
+        insert fails the transaction is rolled back, so a failed import can never
+        leave a partially-imported conversation behind.  The caller supplies a
+        ``conversation_id`` already validated to be unique; message ids are
+        freshly generated (imported message ids are intentionally not reused).
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        conv_id = str(conversation_id)
+
+        with self.db.get_connection() as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO conversations (id, created_at, title) VALUES (?, ?, ?)",
+                    (conv_id, created_at or now, title or "Imported Conversation"),
+                )
+                for message in messages:
+                    conn.execute(
+                        "INSERT INTO messages (id, conversation_id, role, content, timestamp) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            str(uuid4()),
+                            conv_id,
+                            message["role"],
+                            message["content"],
+                            message["timestamp"],
+                        ),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def get_conversation_messages(
+        self, conversation_id: str, limit: Optional[int] = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves messages for a conversation ordered by timestamp.
+
+        ``rowid`` is used as a tie-break so messages that share a timestamp keep
+        their insertion order, which conversation export relies on.  Pass
+        ``limit=None`` to retrieve every message.
+        """
+        with self.db.get_connection() as conn:
+            if limit is None:
+                rows = conn.execute(
+                    "SELECT id, role, content, timestamp FROM messages WHERE conversation_id = ? "
+                    "ORDER BY timestamp ASC, rowid ASC",
+                    (conversation_id,)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, role, content, timestamp FROM messages WHERE conversation_id = ? "
+                    "ORDER BY timestamp ASC, rowid ASC LIMIT ?",
+                    (conversation_id, limit)
+                ).fetchall()
 
             return [dict(row) for row in rows]
 
