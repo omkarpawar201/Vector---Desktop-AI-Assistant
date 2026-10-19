@@ -20,6 +20,9 @@ class CommandInputWidget(QFrame):
 
     command_submitted = Signal(str)
     voice_toggled = Signal(bool)
+    #: Emitted when the user asks to stop the in-progress generation.  The window
+    #: owns the cancellation token and decides what (if anything) is cancellable.
+    stop_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -62,6 +65,13 @@ class CommandInputWidget(QFrame):
                 background-color: #f38ba8;
                 color: #11111b;
             }
+            QPushButton#stop_btn {
+                background-color: #f38ba8;
+                color: #11111b;
+            }
+            QPushButton#stop_btn:hover {
+                background-color: #eba0ac;
+            }
         """)
 
         layout = QHBoxLayout(self)
@@ -74,14 +84,26 @@ class CommandInputWidget(QFrame):
         self.btn_send = QPushButton("Send", self)
         self.btn_send.clicked.connect(self._on_submit)
 
+        # Stop is shown only while a cancellable generation is running; it is
+        # hidden by default and toggled by the owning window.
+        self.btn_stop = QPushButton("■ Stop", self)
+        self.btn_stop.setObjectName("stop_btn")
+        self.btn_stop.clicked.connect(lambda: self.stop_requested.emit())
+        self.btn_stop.hide()
+
         self.btn_mic = QPushButton("🎤 Voice", self)
         self.btn_mic.setObjectName("mic_btn")
         self.btn_mic.setCheckable(True)
         self.btn_mic.toggled.connect(self._on_voice_toggle)
 
         layout.addWidget(self.input_edit)
+        layout.addWidget(self.btn_stop)
         layout.addWidget(self.btn_send)
         layout.addWidget(self.btn_mic)
+
+    def set_stop_visible(self, visible: bool) -> None:
+        """Shows or hides the Stop control for a running generation."""
+        self.btn_stop.setVisible(bool(visible))
 
     def _on_submit(self) -> None:
         text = self.input_edit.text().strip()

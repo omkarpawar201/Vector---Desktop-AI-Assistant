@@ -39,6 +39,15 @@ class RouteResult:
     #: Tool calls that already ran and must not be repeated, e.g. the safe steps
     #: a Tier 2 loop completed before it reached a confirmation-gated tool.
     completed_results: List[ToolResult] = field(default_factory=list)
+    #: True when the answer was rendered incrementally to the UI (streaming).
+    #: The UI finalizes the already-open streamed bubble instead of adding a new
+    #: message, so the displayed text and the persisted text stay identical.
+    streamed: bool = False
+    #: True when the user stopped generation before it completed normally.
+    cancelled: bool = False
+    #: True when the response is incomplete (cancellation or a provider failure
+    #: after output began); partial output must never be persisted as complete.
+    partial: bool = False
 
 
 class IntentRouter:
@@ -68,7 +77,11 @@ class IntentRouter:
     def route_and_execute(
         self,
         user_query: str,
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[str] = None,
+        on_chunk: Optional[Any] = None,
+        on_stream_start: Optional[Any] = None,
+        cancellation_token: Optional[Any] = None,
+        request_id: Optional[str] = None,
     ) -> RouteResult:
         """
         Processes user query through Tier 0 -> Tier 1 -> Tier 2 pipeline.
@@ -78,6 +91,12 @@ class IntentRouter:
         can receive its recent turns as context.  Callers that omit it (or when
         no history manager is configured) get empty context and the previous
         behaviour, unchanged.  Tier 0 / Tier 1 never read history.
+
+        ``on_chunk`` / ``on_stream_start`` / ``cancellation_token`` / ``request_id``
+        are optional streaming hooks.  They are only ever handed to a provider
+        that advertises :attr:`supports_streaming`, so providers that cannot
+        stream (and callers that predate streaming) keep the exact previous
+        behaviour.  The hooks are never consulted by the local tiers.
         """
         if not user_query or not user_query.strip():
             return RouteResult(
@@ -236,6 +255,18 @@ class IntentRouter:
         # 3. TIER 2: Cloud Gemini API Multi-Tool Reasoning Loop
         # =====================================================================
         if self.settings.enable_gemini and self.settings.is_gemini_available:
+            # A cancellation may already have been requested while the local
+            # tiers were being considered; honour it before opening a cloud
+            # generation so a stop never starts new work.
+            if cancellation_token is not None and cancellation_token.is_cancelled():
+                trace.append({"step": "Tier 2 Gemini", "status": "cancelled before start"})
+                return RouteResult(
+                    tier_used=IntentTier.TIER_2_GEMINI,
+                    response_text="Generation stopped.",
+                    execution_trace=trace,
+                    cancelled=True,
+                )
+
             print(f"\n[TIER 2: GEMINI API] -> \"{query}\" (Escalated for cloud reasoning)")
             trace.append({"step": "Tier 2 Gemini", "status": "Escalated to Gemini"})
 
@@ -243,14 +274,23 @@ class IntentRouter:
             # conversation alone.  An empty window keeps the legacy call shape
             # so callers/clients that predate conversation context still work.
             history = self._conversation_context(conversation_id, query)
-            if history:
-                gemini_output = self.gemini_client.execute_reasoning_loop(
-                    user_query=query, history=history, journal=journal
-                )
-            else:
-                gemini_output = self.gemini_client.execute_reasoning_loop(
-                    user_query=query, journal=journal
-                )
+
+            # Only expose the streaming hooks to a provider that supports it.
+            supports_streaming = bool(
+                getattr(self.gemini_client, "supports_streaming", False)
+            )
+            chunk_cb = on_chunk if supports_streaming else None
+            start_cb = on_stream_start if supports_streaming else None
+
+            gemini_output = self.gemini_client.execute_reasoning_loop(
+                user_query=query,
+                history=history or None,
+                journal=journal,
+                on_chunk=chunk_cb,
+                on_stream_start=start_cb,
+                cancellation_token=cancellation_token,
+                request_id=request_id,
+            )
 
             completed = self._completed_from_calls(gemini_output.get("tool_calls"))
 
@@ -267,13 +307,19 @@ class IntentRouter:
                     validated=gemini_output.get("validated_arguments"),
                     completed=completed,
                     response_text=gemini_output.get("response", ""),
+                    streamed=bool(gemini_output.get("streamed")),
+                    cancelled=bool(gemini_output.get("cancelled")),
+                    partial=bool(gemini_output.get("partial")),
                 )
 
             return RouteResult(
                 tier_used=IntentTier.TIER_2_GEMINI,
                 response_text=gemini_output.get("response", ""),
                 execution_trace=trace,
-                completed_results=completed
+                completed_results=completed,
+                streamed=bool(gemini_output.get("streamed")),
+                cancelled=bool(gemini_output.get("cancelled")),
+                partial=bool(gemini_output.get("partial")),
             )
 
         # Offline / Fallback when Gemini is disabled or unavailable
@@ -332,6 +378,9 @@ class IntentRouter:
         validated: Optional[Dict[str, Any]] = None,
         completed: Optional[List[ToolResult]] = None,
         response_text: str = "",
+        streamed: bool = False,
+        cancelled: bool = False,
+        partial: bool = False,
     ) -> RouteResult:
         """
         Builds a confirmation RouteResult bound to one exact action.
@@ -366,6 +415,9 @@ class IntentRouter:
             execution_trace=trace,
             pending_approval=approval,
             completed_results=completed or [],
+            streamed=streamed,
+            cancelled=cancelled,
+            partial=partial,
         )
 
     @staticmethod

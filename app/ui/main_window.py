@@ -3,6 +3,8 @@ Main Application Window and Asynchronous Qt Worker Pipeline for Vector Desktop A
 """
 
 from typing import Any, Dict, Optional
+from uuid import uuid4
+
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.config.settings import Settings, get_settings
+from app.core.cancellation import CancellationToken
 from app.core.router import IntentRouter, RouteResult
 from app.memory.history import (
     DEFAULT_CONVERSATION_TITLE,
@@ -74,6 +77,11 @@ class WorkerSignals(QObject):
     result = Signal(object)
     error = Signal(str)
     ready = Signal()
+    #: Emitted when a provider actually begins streaming an answer.  Carries no
+    #: payload: the window already bound the request/conversation at dispatch.
+    stream_started = Signal()
+    #: One incremental text delta of the assistant answer.
+    chunk = Signal(str)
 
 
 class RouteWorker(QRunnable):
@@ -83,12 +91,16 @@ class RouteWorker(QRunnable):
         self,
         router: IntentRouter,
         user_query: str,
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        cancellation_token: Optional[CancellationToken] = None,
     ):
         super().__init__()
         self.router = router
         self.user_query = user_query
         self.conversation_id = conversation_id
+        self.request_id = request_id
+        self.cancellation_token = cancellation_token
         self.signals = WorkerSignals()
 
     @Slot()
@@ -97,6 +109,10 @@ class RouteWorker(QRunnable):
             route_res = self.router.route_and_execute(
                 user_query=self.user_query,
                 conversation_id=self.conversation_id,
+                on_chunk=self.signals.chunk.emit,
+                on_stream_start=self.signals.stream_started.emit,
+                cancellation_token=self.cancellation_token,
+                request_id=self.request_id,
             )
             self.signals.result.emit(route_res)
         except Exception as e:
@@ -172,6 +188,21 @@ class MainWindow(QMainWindow):
         self.voice_listener = VoiceListener()
 
         self.thread_pool = QThreadPool.globalInstance()
+
+        # ---- Streaming generation tracking ----------------------------------
+        # The latest request id whose chunks may still be rendered; a newer
+        # request replaces it so stale workers cannot write into the active chat.
+        self._active_request_id: Optional[str] = None
+        # The generation the Stop control refers to.  Captured at submit time so
+        # a stop can only ever cancel the generation it was shown for.
+        self._active_generation: Optional[Dict[str, Any]] = None
+        # Request ids whose assistant text has already been persisted, so a
+        # completion/cancellation race can never store a response twice.
+        self._persisted_requests: set = set()
+        # In-progress streamed bubbles keyed by the request that opened them, so
+        # an overlapping newer request can never make an older result finalize
+        # the wrong bubble, and each result closes exactly its own stream.
+        self._live_streams: Dict[str, Any] = {}
 
         self._setup_ui()
 
@@ -271,6 +302,7 @@ class MainWindow(QMainWindow):
         self.command_input = CommandInputWidget(right)
         self.command_input.command_submitted.connect(self._handle_user_command)
         self.command_input.voice_toggled.connect(self._handle_voice_toggle)
+        self.command_input.stop_requested.connect(self._on_stop_generation)
         right_layout.addWidget(self.command_input)
 
         # Status Bar
@@ -606,26 +638,170 @@ class MainWindow(QMainWindow):
         # later step (persistence, rendering, journal) is keyed off this id, so
         # a result can never leak into a conversation selected afterwards.
         conversation_id = self.current_conv_id
+        # A unique id and a per-request cancellation token isolate this
+        # generation from every other one: a stale worker's chunks carry the
+        # wrong id and are ignored, and a later Stop can only cancel the token it
+        # captured (never a newer generation's).
+        request_id = str(uuid4())
+        token = CancellationToken()
+        self._active_request_id = request_id
+        self._active_generation = {
+            "request_id": request_id,
+            "conversation_id": conversation_id,
+            "token": token,
+        }
+
         self.chat_view.add_user_message(query)
         self.history.add_message(conversation_id, "user", query)
 
-        worker = RouteWorker(self.router, query, conversation_id)
+        worker = RouteWorker(
+            self.router,
+            query,
+            conversation_id,
+            request_id=request_id,
+            cancellation_token=token,
+        )
+        worker.signals.chunk.connect(
+            lambda text, rid=request_id, cid=conversation_id: self._on_chunk(rid, cid, text)
+        )
+        worker.signals.stream_started.connect(
+            lambda rid=request_id, cid=conversation_id: self._on_stream_started(rid, cid)
+        )
         worker.signals.result.connect(
-            lambda route_res, cid=conversation_id: self._on_route_finished(route_res, cid)
+            lambda route_res, cid=conversation_id, rid=request_id: self._on_route_finished(route_res, cid, rid)
         )
         worker.signals.error.connect(
-            lambda err, cid=conversation_id: self._on_route_error(err, cid)
+            lambda err, cid=conversation_id, rid=request_id: self._on_route_error(err, cid, rid)
         )
         self.thread_pool.start(worker)
+
+    # ==================================================================
+    # Streaming / Stop generation
+    # ==================================================================
+    def _on_stream_started(self, request_id: Optional[str], conversation_id: Optional[str]) -> None:
+        """
+        A provider began streaming.  Show Stop and open the live bubble.
+
+        Only the newest request may drive the UI, so a stream that started after
+        the user already sent a newer command is ignored.  The bubble is stored
+        under its request id so a superseded stream never finalizes another's.
+        """
+        if request_id is None or request_id != self._active_request_id:
+            return
+        self.command_input.set_stop_visible(True)
+        if self._is_active_conversation(conversation_id):
+            self._live_streams[request_id] = self.chat_view.begin_assistant_stream()
+
+    def _on_chunk(self, request_id: Optional[str], conversation_id: Optional[str], text: str) -> None:
+        """Append one text delta, but only for the active request/conversation."""
+        if request_id is None or request_id != self._active_request_id:
+            return
+        if not self._is_active_conversation(conversation_id):
+            return
+        self.chat_view.append_assistant_stream(self._live_streams.get(request_id), text)
+
+    def _on_stop_generation(self) -> None:
+        """
+        Handle the Stop control without blocking the UI.
+
+        Cancels the exact generation the control was shown for (captured at
+        submit time), so it can never cancel a later generation.  The result
+        still arrives normally and is finalized as a cancelled/partial response.
+        """
+        self.command_input.set_stop_visible(False)
+        generation = self._active_generation
+        if generation is not None:
+            generation["token"].cancel()
+
+    def _hide_stop(self) -> None:
+        self.command_input.set_stop_visible(False)
+
+    def _finish_generation(self, request_id: Optional[str]) -> None:
+        """
+        Clear generation tracking once its result/error has been handled.
+
+        A direct/manual caller that supplies no request id changes nothing, so
+        it cannot tear down an unrelated in-flight generation.
+        """
+        if request_id is None:
+            return
+        if request_id == self._active_request_id:
+            self._active_request_id = None
+        generation = self._active_generation
+        if generation is not None and generation.get("request_id") == request_id:
+            self._active_generation = None
+
+    def _streamed_for(self, request_id: Optional[str]) -> bool:
+        """True when this request opened an in-progress streamed bubble."""
+        return request_id is not None and request_id in self._live_streams
+
+    def _finalize_streamed(
+        self, route_res: RouteResult, conversation_id: Optional[str], request_id: Optional[str], active: bool
+    ) -> None:
+        """
+        Close this request's streamed bubble with the authoritative final text.
+
+        The finalized body is exactly ``route_res.response_text`` (what is also
+        persisted), plus a short plain-text marker when the output is incomplete.
+        The bubble is popped by request id, so only this request can close it.
+        """
+        handle = self._live_streams.pop(request_id, None) if request_id is not None else None
+        suffix = ""
+        if getattr(route_res, "cancelled", False):
+            suffix = " (stopped)"
+        elif getattr(route_res, "partial", False):
+            suffix = " (incomplete)"
+
+        if active:
+            if handle is not None:
+                self.chat_view.finalize_assistant_stream(handle, route_res.response_text, suffix)
+            elif route_res.response_text:
+                self.chat_view.add_assistant_message(route_res.response_text + suffix)
+
+    def _discard_live_stream(self, request_id: Optional[str]) -> None:
+        """Drop this request's live bubble reference without persisting anything."""
+        if request_id is not None:
+            self._live_streams.pop(request_id, None)
+
+    def _persist_assistant_once(
+        self, request_id: Optional[str], conversation_id: Optional[str], text: str
+    ) -> None:
+        """
+        Persist one assistant response, at most once per request id.
+
+        A direct caller that supplies no request id keeps the original
+        un-deduplicated behaviour.
+        """
+        if request_id is not None:
+            if request_id in self._persisted_requests:
+                return
+            self._persisted_requests.add(request_id)
+        try:
+            self.history.add_message(conversation_id, "assistant", text)
+        except Exception:
+            pass
 
     def _is_active_conversation(self, conversation_id: Optional[str]) -> bool:
         """True when a result belongs to the conversation currently on screen."""
         return conversation_id is None or conversation_id == self.current_conv_id
 
-    def _on_route_error(self, error: str, conversation_id: Optional[str] = None) -> None:
+    def _on_route_error(
+        self,
+        error: str,
+        conversation_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> None:
         """Surface a routing failure only in the conversation that raised it."""
+        self._hide_stop()
+        # Close any streamed bubble this request opened; never render a stale
+        # earlier request's output in the active chat.
+        if request_id is not None and request_id in self._live_streams:
+            self.chat_view.finalize_assistant_stream(
+                self._live_streams.pop(request_id), None, " (failed)"
+            )
         if self._is_active_conversation(conversation_id):
             self.chat_view.add_assistant_message(f"Error: {error}")
+        self._finish_generation(request_id)
 
     def _execute_approved(
         self, approval: Optional[PendingApproval], conversation_id: Optional[str] = None
@@ -678,12 +854,16 @@ class MainWindow(QMainWindow):
             self.chat_view.add_action_card(tool_name=tr.tool, message=tr.message, success=tr.success)
 
     def _on_route_finished(
-        self, route_res: RouteResult, conversation_id: Optional[str] = None
+        self,
+        route_res: RouteResult,
+        conversation_id: Optional[str] = None,
+        request_id: Optional[str] = None,
     ) -> None:
         # ``conversation_id`` is the conversation the request was issued in; it
         # defaults to the active one for direct/manual callers.
         conversation_id = conversation_id or self.current_conv_id
         active = self._is_active_conversation(conversation_id)
+        self._hide_stop()
 
         # Optionally surface the exactly-resolved tier (and its confidence) to the
         # terminal for every command — no UI clutter, just the routing fact.
@@ -707,6 +887,12 @@ class MainWindow(QMainWindow):
             self._present_result(completed, conversation_id)
 
         if route_res.requires_confirmation:
+            # Close this request's streamed bubble (if any) before prompting, so
+            # the pending action never leaves a live bubble behind.  The
+            # non-streaming confirmation path opened no bubble and is unchanged.
+            if self._streamed_for(request_id):
+                self._finalize_streamed(route_res, conversation_id, request_id, active)
+            self._finish_generation(request_id)
             if not active:
                 # A confirmation for a conversation the user has since left is
                 # dropped (fail closed): no modal appears over the wrong chat and
@@ -729,14 +915,32 @@ class MainWindow(QMainWindow):
 
         if route_res.tool_result:
             self._present_result(route_res.tool_result, conversation_id)
-        elif route_res.response_text:
-            if active:
-                self.chat_view.add_assistant_message(route_res.response_text)
-            self.history.add_message(conversation_id, "assistant", route_res.response_text)
+            self._finish_generation(request_id)
+            return
 
-            # Speak output aloud via Windows TTS if enabled
-            if active and self.settings.enable_voice:
+        if route_res.response_text:
+            cancelled = getattr(route_res, "cancelled", False)
+            partial = getattr(route_res, "partial", False)
+            if self._streamed_for(request_id):
+                # A streamed answer is finalized in place (never as a new
+                # message), so the visible bubble and the stored row are the same
+                # text.  Partial/cancelled output is displayed but not persisted.
+                if active:
+                    self._finalize_streamed(route_res, conversation_id, request_id, active)
+                else:
+                    self._discard_live_stream(request_id)
+            elif active:
+                self.chat_view.add_assistant_message(route_res.response_text)
+
+            if not partial and not cancelled:
+                self._persist_assistant_once(request_id, conversation_id, route_res.response_text)
+
+            # Speak output aloud via Windows TTS if enabled (never a stopped or
+            # incomplete answer).
+            if active and not (cancelled or partial) and self.settings.enable_voice:
                 self.tts.speak(route_res.response_text)
+
+        self._finish_generation(request_id)
 
     def _journal_cancellation(
         self, route_res: Optional[RouteResult], conversation_id: Optional[str] = None

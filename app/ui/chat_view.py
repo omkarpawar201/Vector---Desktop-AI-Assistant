@@ -1,7 +1,12 @@
 """
 Chat view widget displaying conversation history and visual tool result cards.
+
+The view is the only place that touches Qt widgets for conversation rendering.
+Streaming text arrives on the Qt main thread through a signal and is applied
+here, so a background worker never mutates a widget directly.
 """
 
+import html
 from typing import Any, Dict, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -14,6 +19,34 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+#: Styling shared by the final assistant bubble and the in-progress streamed one,
+#: so text does not visually shift when a stream is finalized.
+_ASSISTANT_BUBBLE_STYLE = """
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+"""
+
+
+class StreamHandle:
+    """
+    A handle to an in-progress streamed assistant bubble.
+
+    Returned by :meth:`ChatViewWidget.begin_assistant_stream` and passed back to
+    the append/finalize calls so a stale stream (from a request that is no longer
+    active) can be ignored by simply not referencing its handle.
+    """
+
+    __slots__ = ("item", "label", "text")
+
+    def __init__(self, item: QListWidgetItem, label: QLabel):
+        self.item = item
+        self.label = label
+        self.text = ""
+
 
 
 class ActionCardWidget(QFrame):
@@ -161,6 +194,54 @@ class ChatViewWidget(QWidget):
         item.setSizeHint(widget.sizeHint())
         self.list_widget.addItem(item)
         self.list_widget.setItemWidget(item, widget)
+        self.list_widget.scrollToBottom()
+
+    def begin_assistant_stream(self) -> StreamHandle:
+        """
+        Open an empty assistant bubble that will be filled incrementally.
+
+        Returns a handle the caller keeps for the duration of the stream; the
+        caller must ignore its own stale handles so a superseded stream cannot
+        write into the wrong place.
+        """
+        item = QListWidgetItem(self.list_widget)
+        label = QLabel("<b>Vector:</b> ", self.list_widget)
+        label.setStyleSheet(_ASSISTANT_BUBBLE_STYLE)
+        label.setWordWrap(True)
+        item.setSizeHint(label.sizeHint())
+        self.list_widget.addItem(item)
+        self.list_widget.setItemWidget(item, label)
+        self.list_widget.scrollToBottom()
+        return StreamHandle(item, label)
+
+    def append_assistant_stream(self, handle: Optional[StreamHandle], text: str) -> None:
+        """Append one text delta to an open streamed bubble (no-op if handle gone)."""
+        if handle is None or not text:
+            return
+        handle.text += text
+        handle.label.setText(f"<b>Vector:</b> {html.escape(handle.text)}")
+        handle.item.setSizeHint(handle.label.sizeHint())
+        self.list_widget.scrollToBottom()
+
+    def finalize_assistant_stream(
+        self,
+        handle: Optional[StreamHandle],
+        text: Optional[str] = None,
+        suffix: str = "",
+    ) -> None:
+        """
+        Replace a streamed bubble's body with the authoritative final text.
+
+        ``text`` (the text that will also be persisted) overwrites the incrementally
+        assembled body so display and storage are guaranteed to agree; ``suffix``
+        is a short plain-text marker such as ``" (stopped)"``.
+        """
+        if handle is None:
+            return
+        if text is not None:
+            handle.text = text
+        handle.label.setText(f"<b>Vector:</b> {html.escape(handle.text)}{suffix}")
+        handle.item.setSizeHint(handle.label.sizeHint())
         self.list_widget.scrollToBottom()
 
     def add_action_card(self, tool_name: str, message: str, success: bool = True) -> None:
