@@ -27,6 +27,7 @@ data/*.db
 data/*.sqlite
 data/*.json
 data/*.jsonl
+docs/
 
 # Local Model Weights & Binary Checkpoints
 models/*.onnx
