@@ -90,7 +90,7 @@ class ActionCardWidget(QFrame):
         layout.setContentsMargins(8, 6, 8, 6)
 
         header_layout = QHBoxLayout()
-        lbl_title = QLabel(f"Tool Action: {tool_name}", self)
+        lbl_title = QLabel(f"Tool Action: {html.escape(str(tool_name))}", self)
         lbl_title.setObjectName("tool_title")
 
         lbl_status = QLabel(status_text, self)
@@ -100,7 +100,7 @@ class ActionCardWidget(QFrame):
         header_layout.addStretch()
         header_layout.addWidget(lbl_status)
 
-        lbl_msg = QLabel(message, self)
+        lbl_msg = QLabel(html.escape(str(message)), self)
         lbl_msg.setObjectName("message")
         lbl_msg.setWordWrap(True)
 
@@ -165,7 +165,7 @@ class ChatViewWidget(QWidget):
     def add_user_message(self, text: str) -> None:
         """Adds a user message item to the chat view."""
         item = QListWidgetItem(self.list_widget)
-        widget = QLabel(f"<b>You:</b> {text}", self.list_widget)
+        widget = QLabel(f"<b>You:</b> {html.escape(str(text))}", self.list_widget)
         widget.setStyleSheet("""
             background-color: #313244;
             color: #89b4fa;
@@ -182,7 +182,7 @@ class ChatViewWidget(QWidget):
     def add_assistant_message(self, text: str) -> None:
         """Adds an assistant response message item to the chat view."""
         item = QListWidgetItem(self.list_widget)
-        widget = QLabel(f"<b>Vector:</b> {text}", self.list_widget)
+        widget = QLabel(f"<b>Vector:</b> {html.escape(str(text))}", self.list_widget)
         widget.setStyleSheet("""
             background-color: #1e1e2e;
             color: #cdd6f4;

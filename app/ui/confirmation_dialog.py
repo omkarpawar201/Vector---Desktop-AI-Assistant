@@ -2,6 +2,7 @@
 Confirmation modal dialog for CONFIRM and DANGEROUS tool operations.
 """
 
+import html
 from typing import Any, Dict, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -73,14 +74,14 @@ class ConfirmationDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        lbl_heading = QLabel(f"⚠️ Confirm Action: {tool_name}", self)
+        lbl_heading = QLabel(f"⚠️ Confirm Action: {html.escape(str(tool_name))}", self)
         lbl_heading.setObjectName("heading")
 
         desc_text = message or f"Vector requests permission to execute '{tool_name}'."
         if arguments:
             desc_text += f"\n\nArguments: {arguments}"
 
-        lbl_body = QLabel(desc_text, self)
+        lbl_body = QLabel(html.escape(str(desc_text)), self)
         lbl_body.setObjectName("body")
         lbl_body.setWordWrap(True)
 

@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
@@ -220,6 +221,24 @@ class MainWindow(QMainWindow):
         ]
         for t in tools:
             self.registry.register(t)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """
+        Stop a generation cleanly when the window is closed.
+
+        Closing the window must never leave a generation running: a live
+        cancellation token is cancelled so a worker stops at its next checkpoint
+        and cannot execute a further action after the window is gone.  Live
+        stream handles are dropped because their widgets die with the window.
+        """
+        generation = self._active_generation
+        if generation is not None:
+            try:
+                generation["token"].cancel()
+            except Exception:
+                pass
+        self._live_streams.clear()
+        super().closeEvent(event)
 
     def _setup_ui(self) -> None:
         self.setStyleSheet("""
@@ -543,6 +562,12 @@ class MainWindow(QMainWindow):
     def _render_loaded_messages(self) -> None:
         """Redraw the chat view from the currently loaded messages."""
         self.chat_view.clear()
+        # Any in-progress streamed bubble lived in the view we just cleared, so
+        # its handle now points at deleted Qt widgets.  Drop them here so a late
+        # chunk/finalize can never touch a destroyed C++ object (which would
+        # raise "Internal C++ object already deleted").  A subsequent result for
+        # a still-active request is rendered as a normal message instead.
+        self._live_streams.clear()
         self.chat_view.set_load_more_visible(self._has_older)
 
         for message in self._loaded_messages:
@@ -716,6 +741,18 @@ class MainWindow(QMainWindow):
     def _hide_stop(self) -> None:
         self.command_input.set_stop_visible(False)
 
+    def _hide_stop_if_current(self, request_id: Optional[str]) -> None:
+        """
+        Hide the Stop control only for the generation it was shown for.
+
+        A handler that supplies no request id (a direct/manual caller or the
+        single-use approval path) keeps the original behaviour.  A *stale*
+        request id must never hide the Stop of the newer generation that is
+        still streaming.
+        """
+        if request_id is None or request_id == self._active_request_id:
+            self._hide_stop()
+
     def _finish_generation(self, request_id: Optional[str]) -> None:
         """
         Clear generation tracking once its result/error has been handled.
@@ -792,7 +829,7 @@ class MainWindow(QMainWindow):
         request_id: Optional[str] = None,
     ) -> None:
         """Surface a routing failure only in the conversation that raised it."""
-        self._hide_stop()
+        self._hide_stop_if_current(request_id)
         # Close any streamed bubble this request opened; never render a stale
         # earlier request's output in the active chat.
         if request_id is not None and request_id in self._live_streams:
@@ -863,7 +900,7 @@ class MainWindow(QMainWindow):
         # defaults to the active one for direct/manual callers.
         conversation_id = conversation_id or self.current_conv_id
         active = self._is_active_conversation(conversation_id)
-        self._hide_stop()
+        self._hide_stop_if_current(request_id)
 
         # Optionally surface the exactly-resolved tier (and its confidence) to the
         # terminal for every command — no UI clutter, just the routing fact.

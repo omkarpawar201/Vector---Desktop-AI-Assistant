@@ -419,7 +419,7 @@ class ConversationSidebar(QWidget):
     def _on_search_changed(self, _text: str) -> None:
         self.load(self.history_manager, self.search.text())
 
-    @Slot(str)
+    @Slot(object)
     def _on_loaded(self, entries: Any) -> None:
         self.set_conversations(list(entries or []))
 
