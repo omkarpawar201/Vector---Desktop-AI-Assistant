@@ -44,7 +44,7 @@ It prioritizes **speed** (local execution first), **safety** (every action passe
 | ☁️ | **Gemini Fallback** | Cloud reasoning for complex tasks, with autonomous multi-tool loops (capped at `MAX_TOOL_CALLS = 10`). |
 | 🔒 | **Strict Security Boundary** | Central Tool Registry + Permission Engine (`SAFE`, `CONFIRM`, `DANGEROUS`, `BLOCKED`) + execution state machine. |
 | 🛡️ | **Privacy Filter** | Redacts env vars, passwords, API keys, and SSH credentials before anything reaches a cloud model. |
-| 🎙️ | **Opt-in Voice Pipeline** | Offline STT via `faster-whisper` (`int8`), plus native Windows TTS (SAPI5) with zero extra RAM. |
+| 🎙️ | **Opt-in Voice Pipeline** | Offline STT via `sherpa-onnx` (opt-in), plus native Windows TTS (SAPI5) with zero extra RAM. |
 | 🖥️ | **Async PySide6 UI** | Dark-mode interface on Qt worker thread pools for a smooth 60 FPS experience. |
 
 ---
@@ -92,7 +92,7 @@ flowchart TD
 |---|---|
 | **Core** | Python 3.11+, PySide6, SQLite (`vector.db`, WAL mode) |
 | **Intent Engines** | Needle 3 (local), Google Gemini (`google-genai`), optional Ollama |
-| **Voice** | `faster-whisper` (STT), `pyttsx3` / SAPI5 (TTS), `silero-vad` (VAD) |
+| **Voice** | `sherpa-onnx` (offline STT, opt-in), `pyttsx3` / SAPI5 (TTS), `silero-vad` (VAD) |
 | **Automation** | `psutil`, `pywin32`, `pycaw`, `PyAutoGUI` |
 
 ---
@@ -122,6 +122,9 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
+**Model assets are not included in Git.** Needle V4 (`models/needle3_vector_v4.cact`) is required for Tier 1 local tool calling and is the **production default**; V5 is **experimental**. If the tuned V4 weights are missing, Tier 1 will be unavailable and requests will escalate or fall back as logged—Tier 0 (reflexes) and cloud fallback (if enabled) can still work for supported cases.  
+Model acquisition instructions are **pending** (no verified download/license path is documented in this repository). Place any obtained weights at the path set by `NEEDLE_TUNED_WEIGHTS_PATH` (default `models/needle3_vector_v4.cact`).
+
 ### Configuration
 
 Edit `.env`:
@@ -137,12 +140,28 @@ REQUIRE_CONFIRMATION_FOR_DANGEROUS=true
 
 | Variable | Default | Description |
 |---|:---:|---|
-| `GEMINI_API_KEY` | – | Your Google Gemini API key |
+| `GEMINI_API_KEY` | – | Your Google Gemini API key (never committed) |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model identifier |
+| `NEEDLE_MODEL_PATH` | `models/needle_2_custom.onnx` | Tier 0.5 ONNX model path |
+| `NEEDLE_OFFICIAL_WEIGHTS_PATH` | `models/needle3.cact` | Official Cactus base weights (reference) |
+| `NEEDLE_TUNED_WEIGHTS_PATH` | `models/needle3_vector_v4.cact` | Tuned V4 weights for Tier 1 (production default; V5 experimental) |
+| `NEEDLE_GENERATION` | `3` | Needle engine generation |
+| `NEEDLE_MAX_DECODE_TOKENS` | `64` | Max decode tokens for Needle tool calls |
+| `NEEDLE_CANDIDATE_USE_EMBEDDING` | `false` | Enable embedding-based candidate fallback (off by default) |
+| `NEEDLE_CANDIDATE_SIMILARITY` | `0.55` | Cosine floor for embedding fallback |
 | `NEEDLE_CONFIDENCE_THRESHOLD` | `0.85` | Min confidence before falling back to Gemini |
-| `ENABLE_GEMINI` | `true` | Set `false` to run **fully offline** |
+| `ENABLE_GEMINI` | `true` | Enable cloud Gemini fallback |
 | `ENABLE_LOCAL_LLM` | `false` | Enable optional Ollama backend |
 | `ENABLE_VOICE` | `false` | Enable STT/TTS voice pipeline |
 | `REQUIRE_CONFIRMATION_FOR_DANGEROUS` | `true` | Ask before dangerous actions |
+| `VOICE_STT_BACKEND` | `online` | STT backend: `online`, `offline`, or `auto` (`offline` uses local `sherpa-onnx`) |
+| `VOICE_STT_MODEL_DIR` | `models/stt` | Directory for local `sherpa-onnx` offline STT model |
+| `DATABASE_PATH` | `data/vector.db` | SQLite database path |
+| `LOG_LEVEL` | `INFO` | Logging verbosity |
+
+**Offline behavior:** With `ENABLE_GEMINI=false` and no API key, the app runs fully offline where possible. Tier 0 reflexes always work locally. Tier 1 requires the tuned V4 model; without it Tier 1 is unavailable. Cloud features are skipped and the app falls back gracefully with clear messages when Gemini is disabled or unavailable. 
+
+**Voice deps:** TTS uses `pyttsx3` (Windows SAPI5). Offline STT uses `sherpa-onnx` (opt-in; add it if `VOICE_STT_BACKEND=offline` or `auto` requires it). Microphone input is separate from TTS availability—missing TTS does not prevent text chat or STT setup.
 
 ### Run
 
@@ -182,7 +201,7 @@ python -m app.main
 1. **No arbitrary code execution:** LLMs cannot run unvalidated shell commands.
 2. **Explicit confirmations:** destructive or power actions always trigger a UI dialog.
 3. **Data redaction:** sensitive files (`.env`, SSH keys) are masked before any cloud call.
-4. **Local-first:** set `ENABLE_GEMINI=false` and Vector runs entirely offline.
+4. **Local-first:** set `ENABLE_GEMINI=false` and Vector runs entirely offline where possible (Tier 0 local; Tier 1 needs tuned V4 weights). Cloud fallback only when enabled and available.
 
 ---
 
