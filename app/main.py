@@ -7,7 +7,7 @@ import argparse
 import logging
 import sys
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.config.settings import get_settings
 from app.memory.database import get_db_manager
@@ -49,10 +49,36 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    window = MainWindow(show_tier_in_terminal=args.show_tier)
+    try:
+        # Eagerly initialize the database manager so a configuration/permission
+        # failure is caught at startup rather than deep in UI initialization.
+        get_db_manager()
+    except Exception as exc:
+        logging.exception("Failed to initialize database: %s", exc)
+        QMessageBox.critical(
+            None,
+            "Vector - Database initialization failed",
+            "Vector could not initialize its database.\n\n"
+            "Please check the database path and permissions in your configuration, "
+            "then restart the application.",
+        )
+        return 1
+
+    try:
+        window = MainWindow(show_tier_in_terminal=args.show_tier)
+    except Exception as exc:
+        logging.exception("Failed to initialize main window: %s", exc)
+        QMessageBox.critical(
+            None,
+            "Vector - Startup failed",
+            "Vector could not start.\n\n"
+            "Please check your configuration and permissions, then restart the application.",
+        )
+        return 1
+
     window.show()
 
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":

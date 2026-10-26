@@ -62,7 +62,31 @@ from app.ui.settings import SettingsDialog
 from app.ui.status_bar import StatusBarWidget
 from app.ui.system_health import SystemHealthDialog
 from app.voice.listener import VoiceListener
-from app.voice.tts import TTSEngine
+try:
+    from app.voice.tts import TTSEngine
+except Exception:
+    import logging as _logging
+
+    _logger = _logging.getLogger(__name__)
+
+    class TTSEngine:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            self._enabled = False
+            self._available = False
+
+        def speak(self, text: str) -> None:
+            return
+
+        def set_enabled(self, enabled: bool) -> None:
+            self._enabled = False
+
+        @property
+        def is_enabled(self) -> bool:
+            return False
+
+        @property
+        def is_available(self) -> bool:
+            return False
 
 #: Messages loaded per page when a conversation is opened.  Older pages are
 #: fetched on demand ("Load earlier messages") so long conversations are never
@@ -883,12 +907,27 @@ class MainWindow(QMainWindow):
 
         if tr.message:
             if active:
-                self.chat_view.add_assistant_message(tr.message)
-            self.history.add_message(conversation_id, "assistant", tr.message)
+                try:
+                    self.chat_view.add_assistant_message(tr.message)
+                except Exception:
+                    pass
+            try:
+                self.history.add_message(conversation_id, "assistant", tr.message)
+            except Exception:
+                # History persistence failure must never crash the UI callback,
+                # repeat side effects, or falsify tool execution status.
+                pass
             if active and self.settings.enable_voice:
-                self.tts.speak(tr.message)
+                try:
+                    if getattr(self.tts, "is_available", True):
+                        self.tts.speak(tr.message)
+                except Exception:
+                    pass
         if active:
-            self.chat_view.add_action_card(tool_name=tr.tool, message=tr.message, success=tr.success)
+            try:
+                self.chat_view.add_action_card(tool_name=tr.tool, message=tr.message, success=tr.success)
+            except Exception:
+                pass
 
     def _on_route_finished(
         self,
