@@ -20,25 +20,26 @@ class StatusBarWidget(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("""
             StatusBarWidget {
-                background-color: #1e1e2e;
-                border-top: 1px solid #313244;
+                background-color: #11111b;
+                border-top: 1px solid #232336;
                 color: #cdd6f4;
-                font-family: 'Segoe UI', sans-serif;
-                font-size: 12px;
-                padding: 4px 12px;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
+                font-size: 11.5px;
+                padding: 2px 12px;
             }
             QLabel {
-                color: #a6adc8;
+                color: #9399b2;
                 padding: 0 8px;
             }
             QLabel#brand {
                 color: #89b4fa;
-                font-weight: bold;
+                font-weight: 700;
+                letter-spacing: 0.5px;
             }
         """)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(16, 4, 16, 4)
 
         self.lbl_brand = QLabel(f"{APP_NAME.upper()} {APP_VERSION}", self)
         self.lbl_brand.setObjectName("brand")

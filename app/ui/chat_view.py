@@ -165,7 +165,7 @@ class MessageContainer(QWidget):
         self.label = label
         self.role = role
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setContentsMargins(14, 3, 14, 3)
         layout.setSpacing(0)
 
         if role == "user":
@@ -203,14 +203,15 @@ class ErrorCardWidget(QFrame):
 
         self.setStyleSheet("""
             ErrorCardWidget {
-                background-color: #24161c;
-                border: 1px solid #f38ba8;
-                border-radius: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #25131c, stop:1 #1c0e15);
+                border: 1px solid rgba(243, 139, 168, 0.45);
+                border-radius: 12px;
+                margin: 2px 14px;
             }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(8)
 
         header = QHBoxLayout()
@@ -227,16 +228,17 @@ class ErrorCardWidget(QFrame):
             self.btn_toggle = QPushButton("Details ▼", self)
             self.btn_toggle.setStyleSheet("""
                 QPushButton {
-                    background-color: #311824;
+                    background-color: rgba(243, 139, 168, 0.12);
                     color: #f38ba8;
-                    border: 1px solid #f38ba8;
-                    border-radius: 6px;
-                    padding: 3px 10px;
+                    border: 1px solid rgba(243, 139, 168, 0.35);
+                    border-radius: 10px;
+                    padding: 3px 12px;
                     font-size: 11px;
-                    font-weight: bold;
+                    font-weight: 600;
                 }
                 QPushButton:hover {
-                    background-color: #451b2e;
+                    background-color: rgba(243, 139, 168, 0.22);
+                    border-color: #f38ba8;
                 }
             """)
             self.btn_toggle.clicked.connect(self._toggle_details)
@@ -351,9 +353,9 @@ class ActionCardWidget(QFrame):
             ActionCardWidget {{
                 background-color: {bg_color};
                 border: 1px solid {border_color};
-                border-radius: 10px;
-                padding: 6px 12px;
-                margin: 2px 4px;
+                border-radius: 12px;
+                padding: 8px 14px;
+                margin: 2px 14px;
             }}
             QLabel#tool_title {{
                 color: #cdd6f4;
@@ -422,7 +424,7 @@ class ChatViewWidget(QWidget):
                 border: 1px solid #45475a;
                 border-radius: 8px;
                 padding: 6px 14px;
-                margin: 8px 12px;
+                margin: 8px 14px;
                 font-size: 12px;
                 font-weight: 500;
             }
@@ -435,12 +437,12 @@ class ChatViewWidget(QWidget):
         self.list_widget = QListWidget(self)
         self.list_widget.setStyleSheet("""
             QListWidget {
-                background-color: #181825;
+                background-color: #14141e;
                 border: none;
                 color: #cdd6f4;
                 font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
                 font-size: 13px;
-                padding: 10px;
+                padding: 12px 4px;
             }
             QListWidget::item {
                 background: transparent;
@@ -451,8 +453,32 @@ class ChatViewWidget(QWidget):
             QListWidget::item:selected {
                 background: transparent;
             }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 8px;
+                margin: 0px 2px 0px 0px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #313244;
+                min-height: 28px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #45475a;
+            }
+            QScrollBar::handle:vertical:pressed {
+                background: #585b70;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
         """)
-        self.list_widget.setSpacing(10)
+        self.list_widget.setSpacing(14)
         self.list_widget.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         layout.addWidget(self.list_widget)
@@ -485,14 +511,15 @@ class ChatViewWidget(QWidget):
         label.setText(f"<b>You:</b> {html.escape(str(text))}")
         label.setStyleSheet("""
             QLabel {
-                background-color: #1e3a5f;
-                color: #dbeafe;
-                border: 1px solid #2b4970;
-                border-radius: 12px;
-                padding: 10px 14px;
-                font-family: 'Segoe UI', sans-serif;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2563eb, stop:1 #1d4ed8);
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 14px;
+                border-bottom-right-radius: 4px;
+                padding: 10px 16px;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
                 font-size: 13px;
-                line-height: 1.4;
+                line-height: 1.45;
             }
         """)
         label.setWordWrap(True)
@@ -510,11 +537,12 @@ class ChatViewWidget(QWidget):
                 background-color: #1e1e2e;
                 color: #cdd6f4;
                 border: 1px solid #313244;
-                border-radius: 12px;
-                padding: 12px 16px;
-                font-family: 'Segoe UI', sans-serif;
+                border-radius: 14px;
+                border-bottom-left-radius: 4px;
+                padding: 12px 18px;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
                 font-size: 13px;
-                line-height: 1.4;
+                line-height: 1.5;
             }
         """)
         label.setWordWrap(True)
@@ -530,7 +558,7 @@ class ChatViewWidget(QWidget):
                 viewport_w = max(400, self.list_widget.width() - 24)
 
             if isinstance(widget, MessageContainer):
-                factor = 0.80 if widget.role == "user" else 0.88
+                factor = 0.78 if widget.role == "user" else 0.86
                 max_w = max(120, int(viewport_w * factor))
                 widget.label.setMaximumWidth(max_w)
                 widget.adjustSize()

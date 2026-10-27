@@ -208,49 +208,87 @@ class ConversationSidebar(QWidget):
         self.setObjectName("conversationSidebar")
         self.setStyleSheet("""
             QWidget#conversationSidebar {
-                background-color: #181825;
-                border-right: 1px solid #313244;
+                background-color: #161622;
+                border-right: 1px solid #28283d;
             }
-            QLabel#sb_heading { color: #89b4fa; font-weight: bold; font-size: 13px; }
+            QLabel#sb_heading { color: #89b4fa; font-weight: 700; font-size: 13px; letter-spacing: 0.3px; }
             QLabel#sb_empty { color: #7f849c; font-size: 12px; padding: 12px; }
             QLabel#sb_error { color: #f38ba8; font-size: 12px; padding: 12px; }
             QLineEdit {
                 background-color: #11111b;
                 border: 1px solid #313244;
-                border-radius: 6px;
+                border-radius: 8px;
                 color: #cdd6f4;
-                padding: 5px 8px;
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+            QLineEdit:focus {
+                border-color: #89b4fa;
             }
             QPushButton#sb_new {
-                background-color: #89b4fa;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #89b4fa, stop:1 #74a0e8);
                 color: #11111b;
                 font-weight: bold;
                 border: none;
-                border-radius: 6px;
-                padding: 6px 10px;
+                border-radius: 8px;
+                padding: 7px 12px;
+                font-size: 12.5px;
             }
-            QPushButton#sb_new:hover { background-color: #74a0e8; }
+            QPushButton#sb_new:hover { background-color: #b4befe; }
             QPushButton#sb_refresh {
-                background-color: #313244;
+                background-color: #242436;
                 color: #cdd6f4;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 10px;
+                border: 1px solid #34344d;
+                border-radius: 8px;
+                padding: 7px 10px;
+                font-size: 12px;
             }
-            QPushButton#sb_refresh:hover { background-color: #45475a; }
+            QPushButton#sb_refresh:hover { background-color: #313248; border-color: #585b70; }
             QListWidget {
-                background-color: #181825;
+                background-color: transparent;
                 border: none;
                 color: #cdd6f4;
                 font-size: 12px;
+                padding: 4px 0px;
             }
-            QListWidget::item { padding: 5px 6px; border-radius: 6px; }
-            QListWidget::item:selected { background-color: #313244; color: #89b4fa; }
+            QListWidget::item {
+                padding: 7px 10px;
+                border-radius: 8px;
+                margin: 2px 2px;
+            }
+            QListWidget::item:hover {
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+            QListWidget::item:selected {
+                background-color: #2b304c;
+                color: #89b4fa;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                margin: 0px;
+                border-radius: 3px;
+            }
+            QScrollBar::handle:vertical {
+                background: #313244;
+                min-height: 24px;
+                border-radius: 3px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #45475a;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         heading = QLabel("💬 Conversations", self)
         heading.setObjectName("sb_heading")

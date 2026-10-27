@@ -29,49 +29,59 @@ class CommandInputWidget(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("""
             CommandInputWidget {
-                background-color: #1e1e2e;
-                border-top: 1px solid #313244;
+                background-color: #161624;
+                border-top: 1px solid #28283d;
             }
             QLineEdit {
-                background-color: #313244;
-                border: 1px solid #45475a;
-                border-radius: 10px;
+                background-color: #11111b;
+                border: 1px solid #313244;
+                border-radius: 12px;
                 color: #cdd6f4;
                 font-family: 'Segoe UI', -apple-system, sans-serif;
-                font-size: 13px;
-                padding: 0px 14px;
-                min-height: 40px;
-                max-height: 40px;
+                font-size: 13.5px;
+                padding: 0px 16px;
+                min-height: 42px;
+                max-height: 42px;
             }
             QLineEdit:focus {
                 border: 1px solid #89b4fa;
+                background-color: #131320;
             }
             QLineEdit::placeholder {
                 color: #6c7086;
             }
             QPushButton {
-                background-color: #89b4fa;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #89b4fa, stop:1 #74a0e8);
                 border: none;
-                border-radius: 10px;
+                border-radius: 12px;
                 color: #11111b;
                 font-family: 'Segoe UI', -apple-system, sans-serif;
                 font-weight: bold;
                 font-size: 13px;
-                padding: 0px 18px;
-                min-height: 40px;
-                max-height: 40px;
+                padding: 0px 20px;
+                min-height: 42px;
+                max-height: 42px;
             }
             QPushButton:hover {
-                background-color: #b4befe;
+                background: #b4befe;
             }
             QPushButton:disabled {
-                background-color: #45475a;
-                color: #6c7086;
+                background-color: #313244;
+                color: #585b70;
             }
             QPushButton#mic_btn {
-                background-color: #313244;
+                background-color: #242438;
                 color: #cdd6f4;
-                border: 1px solid #45475a;
+                border: 1px solid #3b3d56;
+                border-radius: 12px;
+                padding: 0px 16px;
+                min-height: 42px;
+                max-height: 42px;
+                font-weight: 600;
+            }
+            QPushButton#mic_btn:hover {
+                background-color: #313248;
+                border-color: #585b70;
             }
             QPushButton#mic_btn:checked {
                 background-color: #f38ba8;
@@ -81,6 +91,9 @@ class CommandInputWidget(QFrame):
             QPushButton#stop_btn {
                 background-color: #f38ba8;
                 color: #11111b;
+                border-radius: 12px;
+                min-height: 42px;
+                max-height: 42px;
             }
             QPushButton#stop_btn:hover {
                 background-color: #eba0ac;
@@ -88,8 +101,8 @@ class CommandInputWidget(QFrame):
         """)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(10)
 
         self.input_edit = QLineEdit(self)
         self.input_edit.setPlaceholderText("Message Vector...")

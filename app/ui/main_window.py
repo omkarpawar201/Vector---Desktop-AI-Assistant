@@ -280,31 +280,52 @@ class MainWindow(QMainWindow):
 
         # Header bar
         header = QWidget(self)
-        header.setStyleSheet("background-color: #1e1e2e; border-bottom: 1px solid #313244; padding: 4px;")
+        header.setStyleSheet("background-color: #181825; border-bottom: 1px solid #28283d;")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(12, 6, 12, 6)
+        header_layout.setContentsMargins(16, 8, 16, 8)
+        header_layout.setSpacing(8)
 
-        lbl_title = QLabel("Vector Assistant", header)
-        lbl_title.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 14px;")
+        lbl_title = QLabel("✦ Vector Assistant", header)
+        lbl_title.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 14px; letter-spacing: 0.5px;")
+
+        btn_style = """
+            QPushButton {
+                background-color: #242436;
+                color: #cdd6f4;
+                border: 1px solid #34344d;
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #313248;
+                border-color: #4a4a68;
+                color: #ffffff;
+            }
+            QPushButton:pressed {
+                background-color: #1e1e2e;
+            }
+        """
 
         btn_settings = QPushButton("⚙ Settings", header)
-        btn_settings.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_settings.setStyleSheet(btn_style)
         btn_settings.clicked.connect(self._open_settings)
 
         btn_history = QPushButton("🕑 History", header)
-        btn_history.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_history.setStyleSheet(btn_style)
         btn_history.clicked.connect(self._open_action_history)
 
         btn_health = QPushButton("🩺 Health", header)
-        btn_health.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_health.setStyleSheet(btn_style)
         btn_health.clicked.connect(self._open_system_health)
 
         btn_diagnostics = QPushButton("📋 Diagnostics", header)
-        btn_diagnostics.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_diagnostics.setStyleSheet(btn_style)
         btn_diagnostics.clicked.connect(self._open_diagnostics)
 
         btn_backup = QPushButton("💾 Backup", header)
-        btn_backup.setStyleSheet("background-color: #313244; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_backup.setStyleSheet(btn_style)
         btn_backup.clicked.connect(self._open_conversation_io)
 
         header_layout.addWidget(lbl_title)
