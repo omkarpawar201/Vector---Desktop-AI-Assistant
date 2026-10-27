@@ -31,39 +31,47 @@ class CommandInputWidget(QFrame):
             CommandInputWidget {
                 background-color: #1e1e2e;
                 border-top: 1px solid #313244;
-                padding: 6px;
             }
             QLineEdit {
                 background-color: #313244;
                 border: 1px solid #45475a;
-                border-radius: 6px;
+                border-radius: 10px;
                 color: #cdd6f4;
                 font-family: 'Segoe UI', sans-serif;
                 font-size: 13px;
-                padding: 8px 12px;
+                padding: 10px 14px;
             }
             QLineEdit:focus {
                 border: 1px solid #89b4fa;
             }
+            QLineEdit::placeholder {
+                color: #6c7086;
+            }
             QPushButton {
                 background-color: #89b4fa;
                 border: none;
-                border-radius: 6px;
+                border-radius: 10px;
                 color: #11111b;
                 font-weight: bold;
                 font-size: 13px;
-                padding: 8px 16px;
+                padding: 10px 18px;
             }
             QPushButton:hover {
                 background-color: #b4befe;
             }
-            QPushButton#mic_btn {
+            QPushButton:disabled {
                 background-color: #45475a;
+                color: #6c7086;
+            }
+            QPushButton#mic_btn {
+                background-color: #313244;
                 color: #cdd6f4;
+                border: 1px solid #45475a;
             }
             QPushButton#mic_btn:checked {
                 background-color: #f38ba8;
                 color: #11111b;
+                border: none;
             }
             QPushButton#stop_btn {
                 background-color: #f38ba8;
@@ -75,10 +83,11 @@ class CommandInputWidget(QFrame):
         """)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
 
         self.input_edit = QLineEdit(self)
-        self.input_edit.setPlaceholderText("Ask Vector to control your PC (e.g., 'set volume to 40', 'open chrome', 'cpu usage')...")
+        self.input_edit.setPlaceholderText("Message Vector...")
         self.input_edit.returnPressed.connect(self._on_submit)
 
         self.btn_send = QPushButton("Send", self)

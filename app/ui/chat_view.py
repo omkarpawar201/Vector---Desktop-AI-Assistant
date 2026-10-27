@@ -9,7 +9,9 @@ here, so a background worker never mutates a widget directly.
 import html
 from typing import Any, Dict, Optional
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QSizePolicy,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -154,6 +156,42 @@ class ChatViewWidget(QWidget):
         """)
         layout.addWidget(self.list_widget)
 
+
+    def _open_link(self, url):
+        try:
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            QDesktopServices.openUrl(QUrl(url))
+        except Exception:
+            pass
+
+    def _make_message_container(self, label: QLabel, alignment: Qt.AlignmentFlag = Qt.AlignLeft) -> QWidget:
+        container = QWidget(self.list_widget)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        if alignment == Qt.AlignRight:
+            layout.addStretch()
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout.addWidget(label, 0)
+        if alignment == Qt.AlignLeft:
+            layout.addStretch()
+        return container
+
+    def _update_item_size(self, item: QListWidgetItem, container: QWidget) -> None:
+        try:
+            container.adjustSize()
+            hint = container.sizeHint()
+            if hint.width() <= 0 and hasattr(self.list_widget, 'viewport'):
+                hint = QSize(self.list_widget.viewport().width() - 40, hint.height())
+            item.setSizeHint(hint)
+            self.list_widget.update()
+        except Exception:
+            pass
+
+
     def clear(self) -> None:
         """Removes every item from the conversation view."""
         self.list_widget.clear()
@@ -252,3 +290,91 @@ class ChatViewWidget(QWidget):
         self.list_widget.addItem(item)
         self.list_widget.setItemWidget(item, card)
         self.list_widget.scrollToBottom()
+
+    def add_assistant_error(self, summary: str, details: str = "") -> None:
+        try:
+            item = QListWidgetItem(self.list_widget)
+            container = QWidget(self.list_widget)
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+            summary_label = QLabel()
+            summary_label.setTextFormat(Qt.RichText)
+            summary_label.setText(f"<b>⚠ Error</b><br/>{html.escape(str(summary))}")
+            summary_label.setStyleSheet("""
+                background-color: #2a1f1f;
+                color: #f38ba8;
+                border: 1px solid #f38ba8;
+                border-radius: 10px;
+                padding: 10px 14px;
+                font-size: 13px;
+                line-height: 1.6;
+            """)
+            summary_label.setWordWrap(True)
+            summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            summary_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            h = QHBoxLayout()
+            h.setContentsMargins(0, 0, 0, 0)
+            h.addStretch()
+            h.addWidget(summary_label)
+            h.addStretch()
+            layout.addLayout(h)
+            if details:
+                det = QLabel(html.escape(str(details)))
+                det.setStyleSheet("color: #bac2de; font-size: 12px; line-height: 1.5;")
+                det.setWordWrap(True)
+                det.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                det_h = QHBoxLayout()
+                det_h.setContentsMargins(0, 0, 0, 0)
+                det_h.addStretch()
+                det_h.addWidget(det)
+                det_h.addStretch()
+                layout.addLayout(det_h)
+            container.adjustSize()
+            item.setSizeHint(container.sizeHint())
+            self.list_widget.addItem(item)
+            self.list_widget.setItemWidget(item, container)
+            self.list_widget.scrollToBottom()
+        except Exception:
+            # Fallback
+            self.add_assistant_message(f"Error: {summary}")
+
+    def add_welcome_message(self, text: str) -> None:
+        try:
+            item = QListWidgetItem(self.list_widget)
+            label = QLabel()
+            label.setTextFormat(Qt.RichText)
+            label.setOpenExternalLinks(True)
+            try:
+                label.linkActivated.connect(self._open_link)
+            except Exception:
+                pass
+            label.setText(f"<b>Vector</b><br/>{html.escape(str(text)).replace(chr(10), '<br/>')}")
+            label.setStyleSheet("""
+                background-color: #181825;
+                color: #a6adc8;
+                border: 1px solid #313244;
+                border-radius: 10px;
+                padding: 12px 16px;
+                font-size: 13px;
+                line-height: 1.6;
+            """)
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            container = self._make_message_container(label, Qt.AlignLeft)
+            item.setSizeHint(container.sizeHint())
+            self.list_widget.addItem(item)
+            self.list_widget.setItemWidget(item, container)
+            self.list_widget.scrollToBottom()
+        except Exception:
+            self.add_assistant_message(str(text))
+
+    def add_message(self, role: str, text: str) -> None:
+        if role == "user":
+            self.add_user_message(text)
+        elif role == "assistant":
+            self.add_assistant_message(text)
+        else:
+            self.add_assistant_message(text)
+
