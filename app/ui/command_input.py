@@ -37,9 +37,11 @@ class CommandInputWidget(QFrame):
                 border: 1px solid #45475a;
                 border-radius: 10px;
                 color: #cdd6f4;
-                font-family: 'Segoe UI', sans-serif;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
                 font-size: 13px;
-                padding: 10px 14px;
+                padding: 0px 14px;
+                min-height: 40px;
+                max-height: 40px;
             }
             QLineEdit:focus {
                 border: 1px solid #89b4fa;
@@ -52,9 +54,12 @@ class CommandInputWidget(QFrame):
                 border: none;
                 border-radius: 10px;
                 color: #11111b;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
                 font-weight: bold;
                 font-size: 13px;
-                padding: 10px 18px;
+                padding: 0px 18px;
+                min-height: 40px;
+                max-height: 40px;
             }
             QPushButton:hover {
                 background-color: #b4befe;
