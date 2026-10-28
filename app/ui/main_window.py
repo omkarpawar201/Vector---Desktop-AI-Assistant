@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -61,6 +62,13 @@ from app.ui.diagnostics import DiagnosticsDialog
 from app.ui.settings import SettingsDialog
 from app.ui.status_bar import StatusBarWidget
 from app.ui.system_health import SystemHealthDialog
+from app.ui.widgets import (
+    HeroBannerWidget,
+    NavSidebarWidget,
+    QuickChipsWidget,
+    RecentActionsWidget,
+    SystemStatusWidget,
+)
 from app.voice.listener import VoiceListener
 try:
     from app.voice.tts import TTSEngine
@@ -189,7 +197,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.show_tier_in_terminal = show_tier_in_terminal
         self.setWindowTitle("Vector — Desktop AI Assistant")
-        self.resize(800, 600)
+        self.resize(1180, 760)
+        self.setMinimumSize(980, 620)
         self.settings = get_settings()
 
         # Initialize and register all local tools
@@ -267,7 +276,7 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #11111b;
+                background-color: #0b0d14;
             }
         """)
 
@@ -275,112 +284,129 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(10, 10, 10, 6)
+        main_layout.setSpacing(8)
 
-        # Header bar
-        header = QWidget(self)
-        header.setStyleSheet("background-color: #181825; border-bottom: 1px solid #28283d;")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 8, 16, 8)
-        header_layout.setSpacing(8)
-
-        lbl_title = QLabel("✦ Vector Assistant", header)
-        lbl_title.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 14px; letter-spacing: 0.5px;")
-
-        btn_style = """
-            QPushButton {
-                background-color: #242436;
-                color: #cdd6f4;
-                border: 1px solid #34344d;
-                border-radius: 8px;
-                padding: 6px 12px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #313248;
-                border-color: #4a4a68;
-                color: #ffffff;
-            }
-            QPushButton:pressed {
-                background-color: #1e1e2e;
-            }
-        """
-
-        btn_settings = QPushButton("⚙ Settings", header)
-        btn_settings.setStyleSheet(btn_style)
-        btn_settings.clicked.connect(self._open_settings)
-
-        btn_history = QPushButton("🕑 History", header)
-        btn_history.setStyleSheet(btn_style)
-        btn_history.clicked.connect(self._open_action_history)
-
-        btn_health = QPushButton("🩺 Health", header)
-        btn_health.setStyleSheet(btn_style)
-        btn_health.clicked.connect(self._open_system_health)
-
-        btn_diagnostics = QPushButton("📋 Diagnostics", header)
-        btn_diagnostics.setStyleSheet(btn_style)
-        btn_diagnostics.clicked.connect(self._open_diagnostics)
-
-        btn_backup = QPushButton("💾 Backup", header)
-        btn_backup.setStyleSheet(btn_style)
-        btn_backup.clicked.connect(self._open_conversation_io)
-
-        header_layout.addWidget(lbl_title)
-        header_layout.addStretch()
-        header_layout.addWidget(btn_history)
-        header_layout.addWidget(btn_health)
-        header_layout.addWidget(btn_diagnostics)
-        header_layout.addWidget(btn_backup)
-        header_layout.addWidget(btn_settings)
-
-        main_layout.addWidget(header)
-
-        # Body: conversation sidebar on the left, chat on the right.
+        # ------------------------------------------------------------------
+        # 3-Column Dashboard Body
+        # ------------------------------------------------------------------
         body = QWidget(central)
         body_layout = QHBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(0)
+        body_layout.setSpacing(10)
 
-        self.sidebar = ConversationSidebar(body)
-        self.sidebar.setFixedWidth(240)
+        # Column 1: Left Navigation & Quick Actions Stack (width: 240)
+        self.left_stack = QStackedWidget(body)
+        self.left_stack.setFixedWidth(240)
+
+        # Page 0: NavSidebarWidget
+        self.nav_sidebar = NavSidebarWidget(self.left_stack)
+        self.nav_sidebar.chat_clicked.connect(self._on_nav_chat)
+        self.nav_sidebar.conversations_clicked.connect(lambda: self.left_stack.setCurrentIndex(1))
+        self.nav_sidebar.actions_clicked.connect(self._open_action_history)
+        self.nav_sidebar.system_info_clicked.connect(self._open_system_health)
+        self.nav_sidebar.settings_clicked.connect(self._open_settings)
+        self.nav_sidebar.media_clicked.connect(lambda: self._handle_user_command("media play"))
+        self.nav_sidebar.apps_clicked.connect(lambda: self._handle_user_command("get running apps"))
+        self.nav_sidebar.quick_action_triggered.connect(self._handle_user_command)
+
+        # Page 1: Conversation Sessions Manager
+        self.sidebar_container = QWidget(self.left_stack)
+        sidebar_cont_layout = QVBoxLayout(self.sidebar_container)
+        sidebar_cont_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_cont_layout.setSpacing(6)
+
+        btn_back = QPushButton("← Back to Menu", self.sidebar_container)
+        btn_back.setStyleSheet("""
+            QPushButton {
+                background-color: #141724;
+                color: #38bdf8;
+                border: 1px solid #1e2235;
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #1e2235;
+                color: #ffffff;
+            }
+        """)
+        btn_back.clicked.connect(lambda: self.left_stack.setCurrentIndex(0))
+        sidebar_cont_layout.addWidget(btn_back)
+
+        self.sidebar = ConversationSidebar(self.sidebar_container)
         self.sidebar.conversation_selected.connect(self._on_conversation_selected)
         self.sidebar.new_chat_requested.connect(self._on_new_chat)
         self.sidebar.rename_requested.connect(self._on_rename_conversation)
         self.sidebar.delete_requested.connect(self._on_delete_conversation)
-        body_layout.addWidget(self.sidebar)
+        sidebar_cont_layout.addWidget(self.sidebar, stretch=1)
 
-        right = QWidget(body)
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
+        self.left_stack.addWidget(self.nav_sidebar)       # Page 0
+        self.left_stack.addWidget(self.sidebar_container) # Page 1
+        body_layout.addWidget(self.left_stack)
+
+        # Column 2: Center Interaction Hub (Hero Banner + Chat + Composer + Chips)
+        center = QWidget(body)
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(8)
+
+        # Hero Banner
+        self.hero_banner = HeroBannerWidget(center)
+        center_layout.addWidget(self.hero_banner)
 
         # Chat View
-        self.chat_view = ChatViewWidget(right)
+        self.chat_view = ChatViewWidget(center)
         self.chat_view.load_earlier_requested.connect(self._on_load_earlier)
-        right_layout.addWidget(self.chat_view, stretch=1)
+        center_layout.addWidget(self.chat_view, stretch=1)
 
         # Command Input
-        self.command_input = CommandInputWidget(right)
+        self.command_input = CommandInputWidget(center)
         self.command_input.command_submitted.connect(self._handle_user_command)
         self.command_input.voice_toggled.connect(self._handle_voice_toggle)
         self.command_input.stop_requested.connect(self._on_stop_generation)
-        right_layout.addWidget(self.command_input)
+        center_layout.addWidget(self.command_input)
 
-        # Status Bar
-        self.status_bar = StatusBarWidget(right)
-        right_layout.addWidget(self.status_bar)
+        # Quick Prompt Chips
+        self.quick_chips = QuickChipsWidget(center)
+        self.quick_chips.chip_clicked.connect(self._handle_user_command)
+        center_layout.addWidget(self.quick_chips)
 
-        body_layout.addWidget(right, stretch=1)
+        body_layout.addWidget(center, stretch=1)
+
+        # Column 3: Right Telemetry & Activity Panel (width: 290)
+        right = QWidget(body)
+        right.setFixedWidth(290)
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+
+        # System Status (2x2 circular ring gauges)
+        self.system_status = SystemStatusWidget(right)
+        right_layout.addWidget(self.system_status)
+
+        # Recent Actions feed
+        self.recent_actions = RecentActionsWidget(right)
+        right_layout.addWidget(self.recent_actions, stretch=1)
+
+        body_layout.addWidget(right)
+
         main_layout.addWidget(body, stretch=1)
+
+        # Bottom Status Bar
+        self.status_bar = StatusBarWidget(central)
+        self.status_bar.metrics_updated.connect(self.system_status.update_metrics)
+        main_layout.addWidget(self.status_bar)
 
         # Populate the sidebar and render the active conversation (welcome text
         # only appears for an empty conversation).
         self.sidebar.set_history_manager(self.history)
         self._populate_sidebar()
         self._reload_active_conversation()
+
+    def _on_nav_chat(self) -> None:
+        self.left_stack.setCurrentIndex(0)
 
     # ==================================================================
     # Conversation management
@@ -947,6 +973,11 @@ class MainWindow(QMainWindow):
         if active:
             try:
                 self.chat_view.add_action_card(tool_name=tr.tool, message=tr.message, success=tr.success)
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "recent_actions"):
+                    self.recent_actions.add_action(tr.tool, tr.message, tr.success)
             except Exception:
                 pass
 
