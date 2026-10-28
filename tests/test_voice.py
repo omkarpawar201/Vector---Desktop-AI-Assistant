@@ -703,6 +703,9 @@ def _install_fake_pyttsx3(monkeypatch, tts_module):
         def runAndWait(self):
             calls.append(("run",))
 
+    if getattr(tts_module, "pyttsx3", None) is None:
+        import pyttsx3 as _py
+        tts_module.pyttsx3 = _py
     monkeypatch.setattr(tts_module.pyttsx3, "init", lambda: _FakeEngine())
     return calls
 
@@ -712,6 +715,10 @@ def test_tts_speak_disabled_is_noop(monkeypatch):
 
     def _boom():
         raise AssertionError("pyttsx3.init must not be called when disabled")
+
+    if getattr(tts_module, "pyttsx3", None) is None:
+        import pyttsx3 as _py
+        tts_module.pyttsx3 = _py
 
     monkeypatch.setattr(tts_module.pyttsx3, "init", _boom)
 
