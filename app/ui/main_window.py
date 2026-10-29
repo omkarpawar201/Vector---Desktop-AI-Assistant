@@ -646,15 +646,16 @@ class MainWindow(QMainWindow):
                 continue
             role = message.get("role")
             content = str(message.get("content", ""))
+            ts = message.get("timestamp")
             if role == "user":
-                self.chat_view.add_user_message(content)
+                self.chat_view.add_user_message(content, timestamp=ts)
             elif role == "assistant":
-                self.chat_view.add_assistant_message(content)
+                self.chat_view.add_assistant_message(content, timestamp=ts)
             # Any other role (e.g. an inert imported 'system' row) is never
             # rendered and is never treated as an instruction.
 
         if not self._loaded_messages and self._total_messages == 0:
-            self.chat_view.add_assistant_message(WELCOME_TEXT)
+            self.chat_view.add_welcome_message(WELCOME_TEXT)
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self)
