@@ -311,7 +311,9 @@ class MainWindow(QMainWindow):
         self.nav_sidebar.system_info_clicked.connect(self._open_system_health)
         self.nav_sidebar.settings_clicked.connect(self._open_settings)
         self.nav_sidebar.media_clicked.connect(lambda: self._handle_user_command("media play"))
-        self.nav_sidebar.apps_clicked.connect(lambda: self._handle_user_command("get running apps"))
+        self.nav_sidebar.apps_clicked.connect(self._open_diagnostics)
+        if hasattr(self.nav_sidebar, "diagnostics_clicked"):
+            self.nav_sidebar.diagnostics_clicked.connect(self._open_diagnostics)
         self.nav_sidebar.quick_action_triggered.connect(self._handle_user_command)
 
         # Page 1: Conversation Sessions Manager
@@ -374,7 +376,9 @@ class MainWindow(QMainWindow):
 
         # Quick Prompt Chips
         self.quick_chips = QuickChipsWidget(center)
+        self.quick_chips.set_target_input(self.command_input)
         self.quick_chips.chip_clicked.connect(self._handle_user_command)
+        self.quick_chips.chip_prefilled.connect(self.command_input.set_text)
         center_layout.addWidget(self.quick_chips)
 
         body_layout.addWidget(center, stretch=1)
@@ -733,7 +737,9 @@ class MainWindow(QMainWindow):
 
     def _reset_mic_btn(self) -> None:
         self.command_input.btn_mic.setChecked(False)
-        self.command_input.btn_mic.setText("🎤 Voice")
+        self.command_input.btn_mic.setText(
+            getattr(self.command_input, "default_mic_text", "🎤 Voice")
+        )
 
     def _on_transcribe_finished(self, text: str) -> None:
         self._reset_mic_btn()

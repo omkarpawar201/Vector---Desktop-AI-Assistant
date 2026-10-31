@@ -42,6 +42,7 @@ class NavSidebarWidget(QFrame):
     system_info_clicked = Signal()
     media_clicked = Signal()
     apps_clicked = Signal()
+    diagnostics_clicked = Signal()
     settings_clicked = Signal()
     quick_action_triggered = Signal(str)
 
@@ -143,12 +144,13 @@ class NavSidebarWidget(QFrame):
         lbl_qa.setObjectName("sectionHeader")
         layout.addWidget(lbl_qa)
 
-        self._add_quick_action(layout, "🔊  Mute Audio", "mute my audio")
-        self._add_quick_action(layout, "🔊  Set Volume", "set volume to 50")
-        self._add_quick_action(layout, "🎛  Open App", "open chrome")
-        self._add_quick_action(layout, "🔍  Search Files", "search files")
-        self._add_quick_action(layout, "📊  System Stats", "get system stats")
-        self._add_quick_action(layout, "📷  Take Screenshot", "take screenshot")
+        self.quick_action_buttons: list[QPushButton] = []
+        self.btn_qa_mute = self._add_quick_action(layout, "🔊  Mute Audio", "mute my audio")
+        self.btn_qa_volume = self._add_quick_action(layout, "🔊  Set Volume", "set volume to 50")
+        self.btn_qa_open_app = self._add_quick_action(layout, "🎛  Open App", "open chrome")
+        self.btn_qa_search = self._add_quick_action(layout, "🔍  Search Files", "search files")
+        self.btn_qa_stats = self._add_quick_action(layout, "📊  System Stats", "get system stats")
+        self.btn_qa_screenshot = self._add_quick_action(layout, "📷  Take Screenshot", "take screenshot")
 
         layout.addStretch()
 
@@ -176,7 +178,9 @@ class NavSidebarWidget(QFrame):
                 btn.setObjectName("")
             btn.setStyle(btn.style())  # Force style re-eval
 
-    def _add_quick_action(self, layout: QVBoxLayout, label: str, command: str) -> None:
+    def _add_quick_action(self, layout: QVBoxLayout, label: str, command: str) -> QPushButton:
         btn = QPushButton(label, self)
         btn.clicked.connect(lambda: self.quick_action_triggered.emit(command))
+        self.quick_action_buttons.append(btn)
         layout.addWidget(btn)
+        return btn
