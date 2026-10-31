@@ -43,31 +43,9 @@ from app.ui.theme import (
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    format_timestamp,
 )
 from app.ui.widgets.avatars import AssistantAvatar, StatusPillBadge, UserAvatar
-
-
-def format_timestamp(ts: Optional[str] = None) -> str:
-    """
-    Format a timestamp into a clean, human-readable time like '7:34 PM'.
-    Gracefully handles ISO 8601 strings, pre-formatted strings, or None.
-    """
-    if not ts:
-        now = datetime.now()
-        s = now.strftime("%I:%M %p")
-        return s.lstrip("0") if s.startswith("0") else s
-
-    ts_str = str(ts).strip()
-    if "AM" in ts_str or "PM" in ts_str:
-        return ts_str
-
-    try:
-        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        local_dt = dt.astimezone() if dt.tzinfo else dt
-        s = local_dt.strftime("%I:%M %p")
-        return s.lstrip("0") if s.startswith("0") else s
-    except Exception:
-        return ts_str
 
 
 def render_safe_markdown(text: str) -> str:

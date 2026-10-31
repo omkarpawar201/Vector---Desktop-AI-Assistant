@@ -4,9 +4,11 @@ Renders smooth antialiased radial progress meters for CPU, RAM, Disk, and Volume
 """
 
 from __future__ import annotations
+
+import os
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -16,7 +18,9 @@ from PySide6.QtGui import (
     QPen,
 )
 from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+import psutil
 
+from app.tools.system.volume import GetVolumeTool
 from app.ui.theme import (
     ACCENT_GREEN_BRIGHT,
     BG_CARD,
@@ -148,9 +152,12 @@ class SystemStatusWidget(QFrame):
     """
     Card panel displaying live System Status with 4 circular ring meters:
     CPU, RAM, Disk, and Volume in a 2x2 grid.
+    Supports autonomous background polling via QTimer and manual metric updates.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    metrics_polled = Signal(float, float, float, float, bool)
+
+    def __init__(self, parent: Optional[QWidget] = None, start_timer: bool = True):
         super().__init__(parent)
         self.setObjectName("systemStatusCard")
         self.setStyleSheet(f"""
@@ -232,6 +239,56 @@ class SystemStatusWidget(QFrame):
 
         layout.addLayout(grid)
 
+        # Autonomous 2-second background polling timer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.poll_metrics)
+        if start_timer:
+            self.timer.start(2000)
+
+    def start_polling(self, interval_ms: int = 2000) -> None:
+        """Starts the autonomous telemetry polling timer."""
+        self.timer.start(interval_ms)
+
+    def stop_polling(self) -> None:
+        """Stops the autonomous telemetry polling timer."""
+        self.timer.stop()
+
+    def poll_metrics(self) -> dict:
+        """
+        Polls live system metrics (CPU, RAM, Disk, Volume) and updates all 4 circular gauges.
+        Returns a dictionary of gathered metrics.
+        """
+        try:
+            cpu = float(psutil.cpu_percent(interval=None))
+            ram = float(psutil.virtual_memory().percent)
+            try:
+                disk = float(psutil.disk_usage("/").percent)
+            except Exception:
+                disk = float(psutil.disk_usage(os.path.abspath(os.sep)).percent)
+        except Exception:
+            cpu, ram, disk = 0.0, 0.0, 0.0
+
+        vol_val = 0.0
+        is_muted = False
+        try:
+            get_vol = GetVolumeTool()
+            res = get_vol.execute()
+            if res.success and res.data:
+                vol_val = float(res.data.get("level", 0))
+                is_muted = bool(res.data.get("is_muted", False))
+        except Exception:
+            pass
+
+        self.update_metrics(cpu, ram, disk, vol_val, is_muted)
+        self.metrics_polled.emit(cpu, ram, disk, vol_val, is_muted)
+        return {
+            "cpu": cpu,
+            "ram": ram,
+            "disk": disk,
+            "volume": vol_val,
+            "is_muted": is_muted,
+        }
+
     def update_metrics(
         self,
         cpu: float,
@@ -246,3 +303,10 @@ class SystemStatusWidget(QFrame):
         self.gauge_disk.set_value(disk)
         self.gauge_vol.set_value(volume)
         self.gauge_vol.set_muted(is_muted)
+
+        # Set helpful hover tooltips
+        self.gauge_cpu.setToolTip(f"CPU Utilization: {self.gauge_cpu.value:.1f}%")
+        self.gauge_ram.setToolTip(f"Memory (RAM) Usage: {self.gauge_ram.value:.1f}%")
+        self.gauge_disk.setToolTip(f"Disk Space Used: {self.gauge_disk.value:.1f}%")
+        vol_str = "Muted" if is_muted else f"{int(volume)}%"
+        self.gauge_vol.setToolTip(f"System Audio Volume: {vol_str}")

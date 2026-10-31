@@ -271,6 +271,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         self._live_streams.clear()
+        if hasattr(self, "system_status") and hasattr(self.system_status, "stop_polling"):
+            self.system_status.stop_polling()
+        if hasattr(self, "status_bar") and hasattr(self.status_bar, "timer"):
+            self.status_bar.timer.stop()
         super().closeEvent(event)
 
     def _setup_ui(self) -> None:
@@ -388,6 +392,7 @@ class MainWindow(QMainWindow):
 
         # Recent Actions feed
         self.recent_actions = RecentActionsWidget(right)
+        self.recent_actions.connect_journal()
         right_layout.addWidget(self.recent_actions, stretch=1)
 
         body_layout.addWidget(right)
@@ -583,12 +588,19 @@ class MainWindow(QMainWindow):
     # Message loading / pagination
     # ==================================================================
     def _reload_active_conversation(self) -> None:
-        """Render the first page of the active conversation."""
+        """Render the first page of the active conversation and load recent actions."""
         self._loaded_messages = []
         self._page_offset = 0
         self._total_messages = 0
         self._has_older = False
         self._load_page(0)
+        try:
+            if hasattr(self, "recent_actions"):
+                self.recent_actions.load_history(
+                    self.history, conversation_id=self.current_conv_id
+                )
+        except Exception:
+            pass
 
     def _on_load_earlier(self) -> None:
         """Fetch and prepend the next older page."""

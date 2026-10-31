@@ -17,7 +17,11 @@ Design notes
   (``ToolResult.data``) is never stored -- only a short, sanitized summary.
 """
 
+from __future__ import annotations
+
 from typing import Any, Dict, Optional
+
+from PySide6.QtCore import QCoreApplication, QObject, Signal
 
 from app.core.privacy import PrivacyFilter
 
@@ -41,6 +45,23 @@ class JournalStatus:
 
 #: Summaries are truncated so a verbose tool message cannot dump full output.
 MAX_SUMMARY_LENGTH = 500
+
+
+class JournalBridge(QObject):
+    """
+    Qt Signal Bridge connecting Action Journal executions to UI widgets
+    across thread boundaries.
+    """
+
+    action_recorded = Signal(str, str, bool, str)  # tool_name, summary, success, timestamp
+
+    _instance: Optional[JournalBridge] = None
+
+    @classmethod
+    def instance(cls) -> JournalBridge:
+        if cls._instance is None:
+            cls._instance = JournalBridge()
+        return cls._instance
 
 
 class ExecutionJournal:
@@ -93,7 +114,7 @@ class ExecutionJournal:
             if self.max_summary_length and len(safe_summary) > self.max_summary_length:
                 safe_summary = safe_summary[: self.max_summary_length]
 
-            return add_execution(
+            rec_id = add_execution(
                 tool_name=str(tool_name or ""),
                 arguments=safe_arguments,
                 status=str(status or ""),
@@ -101,5 +122,23 @@ class ExecutionJournal:
                 conversation_id=self.conversation_id,
                 confidence=float(confidence or 0.0),
             )
+
+            # Signal live telemetry bridge if Qt event loop is active
+            try:
+                if QCoreApplication.instance() is not None:
+                    from app.ui.theme import format_timestamp
+
+                    is_success = (str(status).upper() == JournalStatus.SUCCESS)
+                    now_str = format_timestamp()
+                    JournalBridge.instance().action_recorded.emit(
+                        str(tool_name or ""),
+                        safe_summary,
+                        is_success,
+                        now_str,
+                    )
+            except Exception:
+                pass
+
+            return rec_id
         except Exception:
             return None

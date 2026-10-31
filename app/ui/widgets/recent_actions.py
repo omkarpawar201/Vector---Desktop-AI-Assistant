@@ -2,11 +2,13 @@
 Recent Actions Activity Feed Widget for Vector Desktop AI Assistant.
 Displays a real-time list of executed tool actions with icons, timestamps,
 and SUCCESS / FAILED status badges.
+Connects with ExecutionJournal, SafeToolExecutor, and HistoryManager.
 """
 
 from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
@@ -28,6 +30,7 @@ from app.ui.theme import (
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    format_timestamp,
 )
 from app.ui.widgets.avatars import StatusPillBadge
 
@@ -49,6 +52,10 @@ TOOL_META = {
     "search_files": ("Search Files", "🔍"),
     "open_file": ("Open File", "📄"),
     "open_folder": ("Open Folder", "📁"),
+    "read_file": ("Read File", "📄"),
+    "write_file": ("Write File", "📝"),
+    "list_dir": ("List Directory", "📁"),
+    "delete_file": ("Delete File", "🗑"),
     "take_screenshot": ("Take Screenshot", "📷"),
     "media_play": ("Media Play", "▶"),
     "media_pause": ("Media Pause", "⏸"),
@@ -57,6 +64,9 @@ TOOL_META = {
     "lock_pc": ("Lock PC", "🔒"),
     "sleep_pc": ("Sleep PC", "💤"),
     "execute_terminal_command": ("Terminal Command", "💻"),
+    "shell_exec": ("Shell Command", "💻"),
+    "get_env": ("Environment Var", "⚙"),
+    "system_diagnostics": ("Diagnostics", "🩺"),
 }
 
 
@@ -68,10 +78,21 @@ class RecentActionItemWidget(QWidget):
         tool_name: str,
         timestamp: str,
         success: bool = True,
+        message: str = "",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        title, icon = TOOL_META.get(tool_name.lower(), (tool_name.replace("_", " ").title(), "⚙"))
+        self.tool_name = str(tool_name)
+        self.message = str(message)
+        self.success = bool(success)
+        self.timestamp = str(timestamp)
+
+        title, icon = TOOL_META.get(
+            self.tool_name.lower(),
+            (self.tool_name.replace("_", " ").title(), "⚙"),
+        )
+        self.display_title = title
+        self.icon = icon
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -116,17 +137,21 @@ class RecentActionItemWidget(QWidget):
         layout.addLayout(col, stretch=1)
         layout.addWidget(badge)
 
+        if message:
+            self.setToolTip(f"{title}: {message}")
+
 
 class RecentActionsWidget(QFrame):
     """
     Recent Actions Activity Feed Panel.
-    Displays live execution events from the assistant.
+    Displays live execution events from the assistant and past Action Journal entries.
     """
 
     clear_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._last_added: Optional[tuple[str, str, bool, float]] = None
         self.setObjectName("recentActionsCard")
         self.setStyleSheet(f"""
             QFrame#recentActionsCard {{
@@ -209,14 +234,22 @@ class RecentActionsWidget(QFrame):
         success: bool = True,
         timestamp: Optional[str] = None,
     ) -> None:
-        """Adds a new executed action card to the top of the feed."""
-        if not timestamp:
-            timestamp = datetime.now().strftime("%I:%M %p")
+        """Adds a new executed action card to the top of the feed with deduplication."""
+        # Deduplication within 1 second for the same tool event
+        now_ts = datetime.now().timestamp()
+        if self._last_added is not None:
+            last_tool, last_msg, last_succ, last_time = self._last_added
+            if last_tool == str(tool_name) and last_succ == bool(success) and (now_ts - last_time) < 1.0:
+                return
+        self._last_added = (str(tool_name), str(message), bool(success), now_ts)
+
+        formatted_ts = format_timestamp(timestamp)
 
         widget = RecentActionItemWidget(
             tool_name=tool_name,
-            timestamp=timestamp,
+            timestamp=formatted_ts,
             success=success,
+            message=message,
             parent=self.list_widget,
         )
 
@@ -229,7 +262,63 @@ class RecentActionsWidget(QFrame):
         while self.list_widget.count() > 50:
             self.list_widget.takeItem(self.list_widget.count() - 1)
 
+    def load_history(
+        self,
+        history_manager: Any,
+        conversation_id: Optional[str] = None,
+        limit: int = 30,
+    ) -> int:
+        """
+        Loads past tool executions from SQLite HistoryManager into the activity feed.
+        Returns the number of entries loaded.
+        """
+        if history_manager is None:
+            return 0
+
+        getter = getattr(history_manager, "get_recent_tool_calls", None)
+        if getter is None:
+            return 0
+
+        try:
+            records = getter(conversation_id=conversation_id, limit=limit)
+        except Exception:
+            return 0
+
+        self.list_widget.clear()
+        self._last_added = None
+        count = 0
+
+        # get_recent_tool_calls returns newest first; iterate in reverse so
+        # when add_action prepends at index 0, newest ends up at the top.
+        for rec in reversed(records or []):
+            tool_name = rec.get("tool_name", "")
+            summary = rec.get("summary", "")
+            status = rec.get("execution_status", "")
+            ts = rec.get("timestamp")
+            is_success = (str(status).upper() == "SUCCESS")
+            self.add_action(
+                tool_name=tool_name,
+                message=summary,
+                success=is_success,
+                timestamp=ts,
+            )
+            count += 1
+
+        return count
+
     def clear_actions(self) -> None:
         """Clears all actions from the feed."""
         self.list_widget.clear()
+        self._last_added = None
         self.clear_requested.emit()
+
+    def connect_journal(self, bridge: Optional[Any] = None) -> None:
+        """Connects this widget to JournalBridge signal emissions."""
+        if bridge is None:
+            from app.memory.journal import JournalBridge
+            bridge = JournalBridge.instance()
+
+        try:
+            bridge.action_recorded.connect(self.add_action)
+        except Exception:
+            pass
